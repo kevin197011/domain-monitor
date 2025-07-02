@@ -10,22 +10,27 @@ module DomainMonitor
     def initialize(config = Config.instance)
       @config = config
       @logger = config.create_logger('Nacos')
-      @polling_interval = 30 # 轮询间隔（秒）
+      @polling_interval = 30 # Polling interval in seconds
       @running = false
 
-      # 解析 Nacos 服务器地址
+      # Parse Nacos server address
       @uri = URI.parse(@config.nacos_addr)
       @http = Net::HTTP.new(@uri.host, @uri.port)
       @http.use_ssl = @uri.scheme == 'https'
     end
 
     def start_listening(&callback)
-      @logger.info 'Starting Nacos config listener...'
+      @logger.info 'Starting Nacos config listener'
       @running = true
 
       # Initial config load
       current_config = fetch_config
-      callback.call(current_config) if current_config && callback
+      if current_config
+        @logger.info 'Initial config loaded from Nacos'
+        callback&.call(current_config)
+      else
+        @logger.warn 'Failed to load initial config from Nacos'
+      end
 
       # Start polling in a separate thread
       @polling_thread = Thread.new do
@@ -39,48 +44,54 @@ module DomainMonitor
 
             new_md5 = calculate_md5(new_config)
             if new_md5 != last_md5
-              @logger.info 'Received config update from Nacos'
+              @logger.info 'Config update detected in Nacos'
               callback&.call(new_config)
               last_md5 = new_md5
+            else
+              @logger.debug 'No config changes detected'
             end
           rescue StandardError => e
-            @logger.error "Error in Nacos polling: #{e.message}"
-            @logger.error e.backtrace.join("\n")
+            @logger.error "Nacos polling error: #{e.message}"
+            @logger.debug e.backtrace.join("\n")
           end
         end
       end
     rescue StandardError => e
-      @logger.error "Error in Nacos client: #{e.message}"
-      @logger.error e.backtrace.join("\n")
+      @logger.error "Failed to start Nacos client: #{e.message}"
+      @logger.debug e.backtrace.join("\n")
       raise
     end
 
     def stop
+      @logger.info 'Stopping Nacos config listener'
       @running = false
       @polling_thread&.join
+      @logger.info 'Nacos config listener stopped'
     end
 
     private
 
     def fetch_config
-      # 构建请求参数
+      # Build request parameters
       params = {
         tenant: @config.nacos_namespace,
         dataId: @config.nacos_data_id,
         group: @config.nacos_group
       }
 
-      # 构建请求路径
+      # Build request path
       path = "/nacos/v1/cs/configs?#{URI.encode_www_form(params)}"
 
-      # 发送请求
+      # Send request
       request = Net::HTTP::Get.new(path)
       request['Content-Type'] = 'application/x-www-form-urlencoded'
 
+      @logger.debug "Fetching config from Nacos: #{path}"
       response = @http.request(request)
 
       case response
       when Net::HTTPSuccess
+        @logger.debug 'Successfully fetched config from Nacos'
         response.body
       else
         @logger.error "Failed to fetch config from Nacos: #{response.code} - #{response.body}"
@@ -88,6 +99,7 @@ module DomainMonitor
       end
     rescue StandardError => e
       @logger.error "Failed to fetch config from Nacos: #{e.message}"
+      @logger.debug e.backtrace.join("\n")
       nil
     end
 

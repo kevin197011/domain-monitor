@@ -4,6 +4,7 @@ require 'dotenv'
 require 'yaml'
 require 'singleton'
 require 'logger'
+require_relative 'logger_formatter'
 
 module DomainMonitor
   class Config
@@ -25,14 +26,6 @@ module DomainMonitor
       max_concurrent_checks: 50,
       metrics_port: 9394,
       log_level: 'info'
-    }.freeze
-
-    LOG_LEVELS = {
-      'debug' => Logger::DEBUG,
-      'info' => Logger::INFO,
-      'warn' => Logger::WARN,
-      'error' => Logger::ERROR,
-      'fatal' => Logger::FATAL
     }.freeze
 
     def initialize
@@ -65,14 +58,8 @@ module DomainMonitor
     end
 
     # Create a new logger with current log level
-    def create_logger(progname = nil)
-      logger = Logger.new($stdout)
-      logger.level = LOG_LEVELS[@log_level.downcase] || Logger::INFO
-      logger.progname = progname if progname
-      logger.formatter = proc do |severity, datetime, progname, msg|
-        "[#{datetime}] #{severity} #{progname}: #{msg}\n"
-      end
-      logger
+    def create_logger(component)
+      LoggerFactory.create_logger(component, @log_level)
     end
 
     private

@@ -24,13 +24,13 @@ module DomainMonitor
     end
 
     def start
-      @logger.info 'Starting domain checker...'
+      @logger.info 'Starting domain checker'
       @running = true
 
       # Start checking thread
       @check_thread = Thread.new do
         # Initial check with delay
-        @logger.info "Waiting #{INITIAL_WAIT_TIME} seconds before first check..."
+        @logger.info "Waiting #{INITIAL_WAIT_TIME} seconds before first check"
         sleep INITIAL_WAIT_TIME
         perform_check
         @initial_check_completed = true
@@ -41,28 +41,29 @@ module DomainMonitor
             sleep @config.check_interval
             perform_check
           rescue StandardError => e
-            @logger.error "Error in check thread: #{e.message}"
-            @logger.error e.backtrace.join("\n")
+            @logger.error "Check thread error: #{e.message}"
+            @logger.debug e.backtrace.join("\n")
           end
         end
       end
     end
 
     def stop
-      @logger.info 'Stopping domain checker...'
+      @logger.info 'Stopping domain checker'
       @running = false
       @check_thread&.join
 
       # Shutdown thread pool
       @thread_pool.shutdown
       @thread_pool.wait_for_termination(10) # Wait up to 10 seconds for completion
+      @logger.info 'Domain checker stopped'
     end
 
     def results
       # If no results and not checking, return empty status
       if @check_results.empty? && !@checking
         if !@initial_check_completed
-          @logger.info 'Waiting for initial check to complete...'
+          @logger.debug 'Waiting for initial check to complete'
           # Return waiting status for all domains
           result_hash = {}
           @config.domains.each do |domain|
@@ -109,7 +110,7 @@ module DomainMonitor
       return if @checking || @config.domains.empty?
 
       @checking = true
-      @logger.info "Checking #{@config.domains.size} domains..."
+      @logger.info "Starting check for #{@config.domains.size} domains"
 
       # Use Promise.all to wait for all checks to complete
       promises = @config.domains.map do |domain|
@@ -127,13 +128,14 @@ module DomainMonitor
         @logger.error 'Domain check timeout (30 seconds)'
       rescue StandardError => e
         @logger.error "Domain check error: #{e.message}"
-        @logger.error e.backtrace.join("\n")
+        @logger.debug e.backtrace.join("\n")
       ensure
         @checking = false
       end
     end
 
     def check_single_domain(domain)
+      @logger.debug "Checking domain: #{domain}"
       check_result = @whois_client.check_domain(domain)
 
       result = {
@@ -151,7 +153,7 @@ module DomainMonitor
       result
     rescue StandardError => e
       @logger.error "Error checking domain #{domain}: #{e.message}"
-      @logger.error e.backtrace.join("\n")
+      @logger.debug e.backtrace.join("\n")
 
       result = {
         expire_days: nil,

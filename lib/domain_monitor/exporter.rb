@@ -7,6 +7,15 @@ require 'rack'
 
 module DomainMonitor
   class Exporter < Sinatra::Base
+    def initialize(checker, config = Config.instance)
+      super()
+      @checker = checker
+      @config = config
+      @logger = config.create_logger('Exporter')
+      setup_metrics
+      @logger.info 'Metrics exporter initialized'
+    end
+
     # Set Puma as server
     set :server, :puma
     # Listen on all interfaces
@@ -14,20 +23,20 @@ module DomainMonitor
     # Set production environment
     set :environment, :production
 
-    def initialize(checker, config = Config.instance)
-      super()
-      @checker = checker
-      @config = config
-      @logger = config.create_logger('Exporter')
-      setup_metrics
-    end
-
     def self.run_server!(checker, config)
       set :port, config.metrics_port
+      logger = config.create_logger('Exporter')
       app = new(checker, config)
 
       Thread.new do
-        Rack::Handler.default.run(app, Host: '0.0.0.0', Port: config.metrics_port)
+        logger.info "Starting metrics server on port #{config.metrics_port}"
+        begin
+          Rack::Handler.default.run(app, Host: '0.0.0.0', Port: config.metrics_port)
+        rescue StandardError => e
+          logger.error "Failed to start metrics server: #{e.message}"
+          logger.debug e.backtrace.join("\n")
+          raise
+        end
       end
     end
 
@@ -70,9 +79,11 @@ module DomainMonitor
       @registry.register(@expire_days)
       @registry.register(@expired)
       @registry.register(@check_status)
+      @logger.debug 'Metrics initialized'
     end
 
     def collect_metrics
+      @logger.debug 'Collecting metrics'
       @checker.results.each do |domain, result|
         update_check_status(domain, result[:check_status])
         update_expire_days(domain, result[:check_status] ? (result[:expire_days] || -1) : -1)
@@ -82,12 +93,13 @@ module DomainMonitor
           if result[:expired]
             @logger.warn "Domain #{domain} is expired or close to expiry (#{result[:expire_days]} days remaining)"
           else
-            @logger.info "Domain #{domain} is healthy (#{result[:expire_days]} days remaining)"
+            @logger.debug "Domain #{domain} is healthy (#{result[:expire_days]} days remaining)"
           end
         else
           @logger.error "Domain #{domain} check failed: #{result[:error]}"
         end
       end
+      @logger.debug 'Metrics collection completed'
     end
 
     def update_check_status(domain, status)
