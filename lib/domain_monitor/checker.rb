@@ -10,7 +10,7 @@ module DomainMonitor
 
     def initialize(config = Config.instance)
       @config = config
-      @logger = Logger.new($stdout)
+      @logger = config.create_logger('Checker')
       @whois_client = WhoisClient.new(config)
       @check_results = Concurrent::Map.new
       @running = false

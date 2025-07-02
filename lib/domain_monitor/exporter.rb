@@ -18,6 +18,7 @@ module DomainMonitor
       super()
       @checker = checker
       @config = config
+      @logger = config.create_logger('Exporter')
       setup_metrics
     end
 
@@ -76,6 +77,16 @@ module DomainMonitor
         update_check_status(domain, result[:check_status])
         update_expire_days(domain, result[:check_status] ? (result[:expire_days] || -1) : -1)
         update_expired_status(domain, result[:check_status] && result[:expired])
+
+        if result[:check_status]
+          if result[:expired]
+            @logger.warn "Domain #{domain} is expired or close to expiry (#{result[:expire_days]} days remaining)"
+          else
+            @logger.info "Domain #{domain} is healthy (#{result[:expire_days]} days remaining)"
+          end
+        else
+          @logger.error "Domain #{domain} check failed: #{result[:error]}"
+        end
       end
     end
 

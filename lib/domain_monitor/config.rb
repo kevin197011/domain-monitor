@@ -15,7 +15,7 @@ module DomainMonitor
     # Application settings (from Nacos)
     attr_reader :domains, :whois_retry_times, :whois_retry_interval,
                 :check_interval, :expire_threshold_days, :max_concurrent_checks,
-                :metrics_port
+                :metrics_port, :log_level
 
     DEFAULT_CONFIG = {
       whois_retry_times: 3,
@@ -23,7 +23,16 @@ module DomainMonitor
       check_interval: 3600,
       expire_threshold_days: 1,
       max_concurrent_checks: 50,
-      metrics_port: 9394
+      metrics_port: 9394,
+      log_level: 'info'
+    }.freeze
+
+    LOG_LEVELS = {
+      'debug' => Logger::DEBUG,
+      'info' => Logger::INFO,
+      'warn' => Logger::WARN,
+      'error' => Logger::ERROR,
+      'fatal' => Logger::FATAL
     }.freeze
 
     def initialize
@@ -55,6 +64,17 @@ module DomainMonitor
       log_current_config
     end
 
+    # Create a new logger with current log level
+    def create_logger(progname = nil)
+      logger = Logger.new($stdout)
+      logger.level = LOG_LEVELS[@log_level.downcase] || Logger::INFO
+      logger.progname = progname if progname
+      logger.formatter = proc do |severity, datetime, progname, msg|
+        "[#{datetime}] #{severity} #{progname}: #{msg}\n"
+      end
+      logger
+    end
+
     private
 
     def set_default_values
@@ -69,10 +89,11 @@ module DomainMonitor
       @expire_threshold_days = settings[:expire_threshold_days] || DEFAULT_CONFIG[:expire_threshold_days]
       @max_concurrent_checks = settings[:max_concurrent_checks] || DEFAULT_CONFIG[:max_concurrent_checks]
       @metrics_port = settings[:metrics_port] || DEFAULT_CONFIG[:metrics_port]
+      @log_level = settings[:log_level]&.downcase || DEFAULT_CONFIG[:log_level]
     end
 
     def log_current_config
-      logger = Logger.new($stdout)
+      logger = create_logger('Config')
       logger.info 'Current configuration:'
       logger.info "- Domains: #{@domains.join(', ')}"
       logger.info "- WHOIS retry times: #{@whois_retry_times}"
@@ -81,6 +102,7 @@ module DomainMonitor
       logger.info "- Expire threshold days: #{@expire_threshold_days}"
       logger.info "- Max concurrent checks: #{@max_concurrent_checks}"
       logger.info "- Metrics port: #{@metrics_port}"
+      logger.info "- Log level: #{@log_level}"
     end
   end
 end

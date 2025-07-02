@@ -9,7 +9,7 @@ module DomainMonitor
   class WhoisClient
     def initialize(config = Config.instance)
       @config = config
-      @logger = Logger.new($stdout)
+      @logger = config.create_logger('WHOIS')
       @client = Whois::Client.new(timeout: 10)
 
       # 设置日志级别为 DEBUG

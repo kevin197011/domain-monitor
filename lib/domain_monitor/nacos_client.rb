@@ -9,7 +9,7 @@ module DomainMonitor
   class NacosClient
     def initialize(config = Config.instance)
       @config = config
-      @logger = Logger.new($stdout)
+      @logger = config.create_logger('Nacos')
       @polling_interval = 30 # 轮询间隔（秒）
       @running = false
 
