@@ -1,8 +1,8 @@
 services:
   domain-monitor:
     build: .
-    volumes:
-      - ./.env:/.env
+    env_file:
+      - .env
     ports:
       - "9394:9394"
     environment:
