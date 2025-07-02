@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  domain-monitor:
+    build: .
+    volumes:
+      - ./.env:/.env
+    ports:
+      - "9394:9394"
+    environment:
+      - RUBY_ENV=production
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9394/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
