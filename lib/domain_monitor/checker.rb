@@ -6,6 +6,7 @@ require 'logger'
 module DomainMonitor
   class Checker
     DEFAULT_THREAD_POOL_SIZE = 50
+    INITIAL_WAIT_TIME = 60 # Initial wait time in seconds
 
     def initialize(config = Config.instance)
       @config = config
@@ -14,10 +15,11 @@ module DomainMonitor
       @check_results = Concurrent::Map.new
       @running = false
       @checking = false
+      @initial_check_completed = false
 
-      # 创建固定大小的线程池
+      # Create fixed size thread pool
       @thread_pool = Concurrent::FixedThreadPool.new(
-        ENV.fetch('DOMAIN_CHECK_THREADS', DEFAULT_THREAD_POOL_SIZE).to_i
+        ENV.fetch('DOMAIN_CHECK_THREADS', @config.max_concurrent_checks).to_i
       )
     end
 
@@ -25,11 +27,15 @@ module DomainMonitor
       @logger.info 'Starting domain checker...'
       @running = true
 
-      # 立即执行第一次检查
-      perform_check
-
       # Start checking thread
       @check_thread = Thread.new do
+        # Initial check with delay
+        @logger.info "Waiting #{INITIAL_WAIT_TIME} seconds before first check..."
+        sleep INITIAL_WAIT_TIME
+        perform_check
+        @initial_check_completed = true
+
+        # Continue with regular checks
         while @running
           begin
             sleep @config.check_interval
@@ -47,33 +53,49 @@ module DomainMonitor
       @running = false
       @check_thread&.join
 
-      # 关闭线程池
+      # Shutdown thread pool
       @thread_pool.shutdown
-      @thread_pool.wait_for_termination(10) # 等待最多10秒完成当前任务
+      @thread_pool.wait_for_termination(10) # Wait up to 10 seconds for completion
     end
 
     def results
-      # 如果没有结果且不在检查中，返回空状态
+      # If no results and not checking, return empty status
       if @check_results.empty? && !@checking
-        @logger.debug '没有检查结果，执行立即检查'
-        perform_check
+        if !@initial_check_completed
+          @logger.info 'Waiting for initial check to complete...'
+          # Return waiting status for all domains
+          result_hash = {}
+          @config.domains.each do |domain|
+            result_hash[domain] = {
+              expire_days: nil,
+              expired: false,
+              check_status: false,
+              last_check: Time.now,
+              error: 'Waiting for initial check'
+            }
+          end
+          return result_hash
+        else
+          @logger.debug 'No check results, performing immediate check'
+          perform_check
+        end
       end
 
-      # 将 Concurrent::Map 转换为普通 Hash
+      # Convert Concurrent::Map to regular Hash
       result_hash = {}
       @check_results.each_pair do |key, value|
         result_hash[key] = value
       end
 
-      # 如果仍然没有结果，返回等待状态
+      # If still no results but have domains, return waiting status
       if result_hash.empty? && !@config.domains.empty?
-        @config.domains.each do |domain_config|
-          result_hash[domain_config[:domain]] = {
+        @config.domains.each do |domain|
+          result_hash[domain] = {
             expire_days: nil,
             expired: false,
             check_status: false,
             last_check: Time.now,
-            error: @checking ? '检查进行中' : '等待检查'
+            error: @checking ? 'Check in progress' : 'Waiting for check'
           }
         end
       end
@@ -87,32 +109,31 @@ module DomainMonitor
       return if @checking || @config.domains.empty?
 
       @checking = true
-      @logger.info "检查 #{@config.domains.size} 个域名..."
+      @logger.info "Checking #{@config.domains.size} domains..."
 
-      # 使用 Promise.all 等待所有检查完成
-      promises = @config.domains.map do |domain_config|
+      # Use Promise.all to wait for all checks to complete
+      promises = @config.domains.map do |domain|
         Concurrent::Promise.execute(executor: @thread_pool) do
-          check_single_domain(domain_config)
+          check_single_domain(domain)
         end
       end
 
-      # 等待所有检查完成
+      # Wait for all checks to complete
       begin
-        results = Concurrent::Promise.zip(*promises).value!(30) # 设置30秒超时
+        results = Concurrent::Promise.zip(*promises).value!(30) # Set 30 seconds timeout
         success_count = results.count { |r| r && r[:check_status] }
-        @logger.info "域名检查完成: #{success_count}/#{results.size} 成功"
+        @logger.info "Domain check completed: #{success_count}/#{results.size} successful"
       rescue Concurrent::TimeoutError
-        @logger.error '域名检查超时（30秒）'
+        @logger.error 'Domain check timeout (30 seconds)'
       rescue StandardError => e
-        @logger.error "域名检查出错: #{e.message}"
+        @logger.error "Domain check error: #{e.message}"
         @logger.error e.backtrace.join("\n")
       ensure
         @checking = false
       end
     end
 
-    def check_single_domain(domain_config)
-      domain = domain_config[:domain]
+    def check_single_domain(domain)
       check_result = @whois_client.check_domain(domain)
 
       result = {
@@ -126,10 +147,10 @@ module DomainMonitor
       @check_results[domain] = result
       log_check_result(domain, check_result)
 
-      # 返回结果用于统计
+      # Return result for statistics
       result
     rescue StandardError => e
-      @logger.error "检查域名 #{domain} 时出错: #{e.message}"
+      @logger.error "Error checking domain #{domain}: #{e.message}"
       @logger.error e.backtrace.join("\n")
 
       result = {
@@ -146,9 +167,9 @@ module DomainMonitor
 
     def log_check_result(domain, result)
       if result[:status] == :success
-        @logger.info "域名 #{domain}: #{result[:days_until_expiry]} 天后过期"
+        @logger.info "Domain #{domain}: #{result[:days_until_expiry]} days until expiry"
       else
-        @logger.error "域名 #{domain} 检查失败: #{result[:error]}"
+        @logger.error "Domain #{domain} check failed: #{result[:error]}"
       end
     end
   end

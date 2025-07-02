@@ -26,9 +26,9 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'concurrent-ruby', '~> 1.2'
   spec.add_dependency 'dotenv', '~> 2.8'
   spec.add_dependency 'prometheus-client', '~> 4.1'
+  spec.add_dependency 'puma', '~> 6.4'
   spec.add_dependency 'rack', '~> 2.2', '>= 2.2.4'
   spec.add_dependency 'sinatra', '~> 3.1'
-  spec.add_dependency 'webrick', '~> 1.8'
   spec.add_dependency 'whois', '~> 5.1'
 
   # Development dependencies

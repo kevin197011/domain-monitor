@@ -18,7 +18,8 @@ task :push do
   system 'git push origin main'
 end
 
-task :build do
+task :docker do
   system 'export COMPOSE_BAKE=true'
   system 'docker compose up --build -d'
+  system 'docker compose logs -f'
 end
