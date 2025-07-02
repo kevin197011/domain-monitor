@@ -17,3 +17,8 @@ task :push do
   system 'git pull'
   system 'git push origin main'
 end
+
+task :build do
+  system 'export COMPOSE_BAKE=true'
+  system 'docker compose up --build -d'
+end
