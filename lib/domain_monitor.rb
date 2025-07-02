@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require 'domain_monitor/version'
-require 'domain_monitor/logger_formatter'
+require 'domain_monitor/logger'
 require 'domain_monitor/config'
 require 'domain_monitor/nacos_client'
 require 'domain_monitor/whois_client'

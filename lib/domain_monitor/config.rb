@@ -4,7 +4,7 @@ require 'dotenv'
 require 'yaml'
 require 'singleton'
 require 'logger'
-require_relative 'logger_formatter'
+require_relative 'logger'
 
 module DomainMonitor
   class Config
@@ -59,7 +59,7 @@ module DomainMonitor
 
     # Create a new logger with current log level
     def create_logger(component)
-      LoggerFactory.create_logger(component, @log_level)
+      Logger.create(component)
     end
 
     private
@@ -77,6 +77,9 @@ module DomainMonitor
       @max_concurrent_checks = settings[:max_concurrent_checks] || DEFAULT_CONFIG[:max_concurrent_checks]
       @metrics_port = settings[:metrics_port] || DEFAULT_CONFIG[:metrics_port]
       @log_level = settings[:log_level]&.downcase || DEFAULT_CONFIG[:log_level]
+
+      # Update all loggers if log level changed
+      Logger.update_all_level(::Logger.const_get(@log_level.upcase)) if @log_level
     end
 
     def log_current_config

@@ -11,9 +11,6 @@ module DomainMonitor
       @config = config
       @logger = config.create_logger('WHOIS')
       @client = Whois::Client.new(timeout: 10)
-
-      # 设置日志级别为 DEBUG
-      @logger.level = Logger::INFO
     end
 
     def check_domain(domain)
