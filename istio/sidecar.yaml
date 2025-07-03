@@ -1,0 +1,42 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Sidecar
+metadata:
+  name: domain-monitor-sidecar
+  namespace: domain-monitor
+  labels:
+    app: domain-monitor
+spec:
+  workloadSelector:
+    labels:
+      app.kubernetes.io/name: domain-monitor
+  ingress:
+  - port:
+      number: 9394
+      name: http
+      protocol: HTTP
+    defaultEndpoint: 127.0.0.1:9394
+  egress:
+  # Allow access to external domains for domain monitoring
+  - hosts:
+    - "./*"
+    - "istio-system/*"
+    - "monitoring/*"
+  # External hosts for domain checking
+  - port:
+      number: 53
+      name: dns
+      protocol: TCP
+    hosts:
+    - "*"
+  - port:
+      number: 80
+      name: http-external
+      protocol: HTTP
+    hosts:
+    - "*"
+  - port:
+      number: 443
+      name: https-external
+      protocol: HTTPS
+    hosts:
+    - "*"

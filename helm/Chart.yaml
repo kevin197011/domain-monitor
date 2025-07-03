@@ -1,0 +1,16 @@
+apiVersion: v2
+name: domain-monitor
+description: A Helm chart for Domain Monitor application
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - domain
+  - monitoring
+  - ruby
+home: https://github.com/yourusername/domain-monitor
+sources:
+  - https://github.com/yourusername/domain-monitor
+maintainers:
+  - name: Domain Monitor Team
+    email: team@example.com
