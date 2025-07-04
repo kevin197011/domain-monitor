@@ -7,6 +7,9 @@ services:
       - "9394:9394"
     environment:
       - RUBY_ENV=production
+      # Nacos authentication (will be read from .env if present)
+      - NACOS_USERNAME=${NACOS_USERNAME}
+      - NACOS_PASSWORD=${NACOS_PASSWORD}
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9394/health"]

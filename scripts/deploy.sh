@@ -18,6 +18,8 @@ IMAGE_TAG="latest"
 DRY_RUN=false
 SKIP_ISTIO=false
 MONITORING=true
+NACOS_USERNAME=""
+NACOS_PASSWORD=""
 
 # 帮助信息
 show_help() {
@@ -31,6 +33,8 @@ Domain Monitor Helm & Istio 部署脚本
   -r, --release RELEASE        Helm release 名称 (默认: domain-monitor)
   -d, --domain DOMAIN          应用域名 (必需)
   -t, --tag TAG               Docker 镜像标签 (默认: latest)
+  -u, --nacos-user USER       Nacos 用户名 (可选)
+  -p, --nacos-pass PASS       Nacos 密码 (可选)
   --dry-run                   只显示将要执行的命令，不实际执行
   --skip-istio                跳过 Istio 配置部署
   --no-monitoring             禁用 Prometheus 监控
@@ -39,6 +43,7 @@ Domain Monitor Helm & Istio 部署脚本
 示例:
   $0 --domain domain-monitor.example.com --tag v1.0.0
   $0 -d domain-monitor.local --skip-istio --dry-run
+  $0 -d domain-monitor.example.com -u nacos -p secret123
 EOF
 }
 
@@ -160,6 +165,17 @@ deploy_helm_chart() {
         helm_args+=("--set" "istio.enabled=false")
     fi
 
+    # 添加 Nacos 认证配置
+    if [ -n "$NACOS_USERNAME" ] && [ -n "$NACOS_PASSWORD" ]; then
+        nacos_username_b64=$(echo -n "$NACOS_USERNAME" | base64)
+        nacos_password_b64=$(echo -n "$NACOS_PASSWORD" | base64)
+        helm_args+=(
+            "--set" "secrets.data.nacos_username=$nacos_username_b64"
+            "--set" "secrets.data.nacos_password=$nacos_password_b64"
+        )
+        log_info "已配置 Nacos 认证信息"
+    fi
+
     execute "helm ${helm_args[*]}" "部署 Helm Chart"
 }
 
@@ -259,6 +275,14 @@ while [[ $# -gt 0 ]]; do
             IMAGE_TAG="$2"
             shift 2
             ;;
+        -u|--nacos-user)
+            NACOS_USERNAME="$2"
+            shift 2
+            ;;
+        -p|--nacos-pass)
+            NACOS_PASSWORD="$2"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -305,6 +329,7 @@ main() {
     echo "  Dry Run: $DRY_RUN"
     echo "  跳过 Istio: $SKIP_ISTIO"
     echo "  启用监控: $MONITORING"
+    echo "  Nacos 认证: $([ -n "$NACOS_USERNAME" ] && echo "已配置用户: $NACOS_USERNAME" || echo "未配置")"
     echo
 
     if [ "$DRY_RUN" = false ]; then

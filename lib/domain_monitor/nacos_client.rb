@@ -12,11 +12,16 @@ module DomainMonitor
       @logger = config.create_logger('Nacos')
       @polling_interval = 30 # Polling interval in seconds
       @running = false
+      @access_token = nil
+      @token_expires_at = nil
 
       # Parse Nacos server address
       @uri = URI.parse(@config.nacos_addr)
       @http = Net::HTTP.new(@uri.host, @uri.port)
       @http.use_ssl = @uri.scheme == 'https'
+
+      # Authenticate if username and password are provided
+      authenticate if authentication_required?
     end
 
     def start_listening(&callback)
@@ -71,7 +76,68 @@ module DomainMonitor
 
     private
 
+    def authentication_required?
+      !@config.nacos_username.nil? && !@config.nacos_username.empty? &&
+        !@config.nacos_password.nil? && !@config.nacos_password.empty?
+    end
+
+    def authenticate
+      @logger.info 'Authenticating with Nacos server'
+
+      # Build authentication request
+      auth_path = '/nacos/v1/auth/login'
+      params = {
+        username: @config.nacos_username,
+        password: @config.nacos_password
+      }
+
+      request = Net::HTTP::Post.new(auth_path)
+      request.set_form_data(params)
+      request['Content-Type'] = 'application/x-www-form-urlencoded'
+
+      response = @http.request(request)
+
+      case response
+      when Net::HTTPSuccess
+        auth_data = JSON.parse(response.body)
+        @access_token = auth_data['accessToken']
+        @token_expires_at = Time.now + (auth_data['tokenTtl'] || 18_000) # Default 5 hours
+        @logger.info 'Successfully authenticated with Nacos'
+        @logger.debug "Access token expires at: #{@token_expires_at}"
+      else
+        @logger.error "Failed to authenticate with Nacos: #{response.code} - #{response.body}"
+        raise "Nacos authentication failed: #{response.code}"
+      end
+    rescue JSON::ParserError => e
+      @logger.error "Failed to parse authentication response: #{e.message}"
+      raise "Nacos authentication response parsing failed: #{e.message}"
+    rescue StandardError => e
+      @logger.error "Authentication error: #{e.message}"
+      @logger.debug e.backtrace.join("\n")
+      raise
+    end
+
+    def ensure_authentication
+      return unless authentication_required?
+
+      # Check if token is expired or will expire soon (5 minutes buffer)
+      if @access_token.nil? || @token_expires_at.nil? ||
+         Time.now >= (@token_expires_at - 300)
+        @logger.info 'Access token expired or expiring soon, re-authenticating'
+        authenticate
+      end
+    end
+
+    def add_auth_header(request)
+      return unless authentication_required? && @access_token
+
+      request['Authorization'] = "Bearer #{@access_token}"
+    end
+
     def fetch_config
+      # Ensure authentication is valid
+      ensure_authentication
+
       # Build request parameters
       params = {
         tenant: @config.nacos_namespace,
@@ -85,6 +151,9 @@ module DomainMonitor
       # Send request
       request = Net::HTTP::Get.new(path)
       request['Content-Type'] = 'application/x-www-form-urlencoded'
+
+      # Add authentication header if required
+      add_auth_header(request)
 
       @logger.debug "Fetching config from Nacos: #{path}"
       response = @http.request(request)

@@ -11,7 +11,8 @@ module DomainMonitor
     include Singleton
 
     # Nacos connection settings
-    attr_reader :nacos_addr, :nacos_namespace, :nacos_group, :nacos_data_id
+    attr_reader :nacos_addr, :nacos_namespace, :nacos_group, :nacos_data_id,
+                :nacos_username, :nacos_password
 
     # Application settings (from Nacos)
     attr_reader :domains, :whois_retry_times, :whois_retry_interval,
@@ -40,6 +41,8 @@ module DomainMonitor
       @nacos_namespace = ENV['NACOS_NAMESPACE'] || 'dev'
       @nacos_group = ENV['NACOS_GROUP'] || 'DEFAULT_GROUP'
       @nacos_data_id = ENV['NACOS_DATA_ID'] || 'domain_monitor.yml'
+      @nacos_username = ENV['NACOS_USERNAME']
+      @nacos_password = ENV['NACOS_PASSWORD']
     end
 
     def update_domains_config(yaml_content)

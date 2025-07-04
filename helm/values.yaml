@@ -89,6 +89,11 @@ affinity:
 env:
   RUBY_ENV: production
   PORT: "9394"
+  # Nacos configuration
+  NACOS_ADDR: "http://nacos-server:8848"
+  NACOS_NAMESPACE: "production"
+  NACOS_GROUP: "DEFAULT_GROUP"
+  NACOS_DATA_ID: "domain_monitor.yml"
 
 # ConfigMap for application configuration
 config:
@@ -110,8 +115,12 @@ config:
 # Secret for sensitive data
 secrets:
   enabled: true
-  data: {}
-    # Add your secret data here
+  data:
+    # Nacos authentication (base64 encoded values)
+    # nacos_username: "bmFjb3M="  # base64 encoded 'nacos'
+    # nacos_password: "bmFjb3M="  # base64 encoded 'nacos'
+
+    # Add your other secret data here
     # api_key: ""
     # database_url: ""
 
