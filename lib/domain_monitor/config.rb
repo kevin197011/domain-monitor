@@ -113,7 +113,7 @@ module DomainMonitor
       end
 
       def validate_nacos_config
-        raise 'NACOS_SERVER_ADDR is required' if @nacos_addr.nil? || @nacos_addr.empty?
+        raise 'NACOS_ADDR is required' if @nacos_addr.nil? || @nacos_addr.empty?
         # nacos_namespace can be empty (for default namespace)
         raise 'NACOS_GROUP is required' if @nacos_group.nil? || @nacos_group.empty?
         raise 'NACOS_DATA_ID is required' if @nacos_data_id.nil? || @nacos_data_id.empty?
