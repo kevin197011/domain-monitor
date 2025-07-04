@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'logger'
-
 module DomainMonitor
   # Logger management class
   # Provides unified logging functionality across the application
@@ -16,6 +14,10 @@ module DomainMonitor
         logger.level = current_level
         register(logger)
         logger
+      end
+
+      def instance
+        @instance ||= create('DomainMonitor')
       end
 
       def update_all_level(level)
@@ -34,10 +36,16 @@ module DomainMonitor
       end
 
       def current_level
-        return @current_level if defined?(@current_level)
+        return @current_level if defined?(@current_level) && @current_level
 
-        level = Config.instance.log_level || 'info'
-        @current_level = ::Logger.const_get(level.upcase)
+        level_name = 'info'
+        begin
+          level_name = Config.log_level if defined?(Config) && Config.respond_to?(:log_level)
+        rescue StandardError
+          # 如果Config还未初始化，使用默认值
+        end
+
+        @current_level = ::Logger.const_get(level_name.upcase)
       rescue NameError
         @current_level = ::Logger::INFO
       end

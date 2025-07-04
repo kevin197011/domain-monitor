@@ -1,177 +1,130 @@
 # frozen_string_literal: true
 
-require 'concurrent'
-require 'logger'
-
 module DomainMonitor
   class Checker
-    DEFAULT_THREAD_POOL_SIZE = 50
-    INITIAL_WAIT_TIME = 60 # Initial wait time in seconds
+    attr_reader :domain_metrics
 
-    def initialize(config = Config.instance)
+    def initialize(config)
       @config = config
-      @logger = config.create_logger('Checker')
-      @whois_client = WhoisClient.new(config)
-      @check_results = Concurrent::Map.new
-      @running = false
-      @checking = false
-      @initial_check_completed = false
+      @logger = Logger.create('Checker')
+      @whois_client = WhoisClient.new(@config)
+      @domain_metrics = {}
+      @metrics_mutex = Mutex.new
 
-      # Create fixed size thread pool
-      @thread_pool = Concurrent::FixedThreadPool.new(
-        ENV.fetch('DOMAIN_CHECK_THREADS', @config.max_concurrent_checks).to_i
-      )
+      # 初始化所有域名的指标
+      initialize_domain_metrics
     end
 
-    def start
-      @logger.info 'Starting domain checker'
-      @running = true
+    def check_all_domains
+      return if @config.domains.empty?
 
-      # Start checking thread
-      @check_thread = Thread.new do
-        # Initial check with delay
-        @logger.info "Waiting #{INITIAL_WAIT_TIME} seconds before first check"
-        sleep INITIAL_WAIT_TIME
-        perform_check
-        @initial_check_completed = true
+      @logger.info "Starting domain check for #{@config.domains.size} domains"
 
-        # Continue with regular checks
-        while @running
-          begin
-            sleep @config.check_interval
-            perform_check
-          rescue StandardError => e
-            @logger.error "Check thread error: #{e.message}"
-            @logger.debug e.backtrace.join("\n")
-          end
-        end
-      end
-    end
+      # 使用线程池并发检查域名
+      thread_pool = Concurrent::FixedThreadPool.new(@config.max_concurrent_checks)
+      futures = []
 
-    def stop
-      @logger.info 'Stopping domain checker'
-      @running = false
-      @check_thread&.join
-
-      # Shutdown thread pool
-      @thread_pool.shutdown
-      @thread_pool.wait_for_termination(10) # Wait up to 10 seconds for completion
-      @logger.info 'Domain checker stopped'
-    end
-
-    def results
-      # If no results and not checking, return empty status
-      if @check_results.empty? && !@checking
-        if !@initial_check_completed
-          @logger.debug 'Waiting for initial check to complete'
-          # Return waiting status for all domains
-          result_hash = {}
-          @config.domains.each do |domain|
-            result_hash[domain] = {
-              expire_days: nil,
-              expired: false,
-              check_status: false,
-              last_check: Time.now,
-              error: 'Waiting for initial check'
-            }
-          end
-          return result_hash
-        else
-          @logger.debug 'No check results, performing immediate check'
-          perform_check
+      @config.domains.each do |domain|
+        futures << Concurrent::Future.execute(executor: thread_pool) do
+          check_domain(domain)
         end
       end
 
-      # Convert Concurrent::Map to regular Hash
-      result_hash = {}
-      @check_results.each_pair do |key, value|
-        result_hash[key] = value
+      # 等待所有检查完成
+      futures.each(&:wait)
+      thread_pool.shutdown
+      thread_pool.wait_for_termination(30)
+
+      @logger.info 'Domain check cycle completed'
+    rescue StandardError => e
+      @logger.error "Error in domain check cycle: #{e.message}"
+      @logger.debug e.backtrace.join("\n")
+    ensure
+      thread_pool&.shutdown
+    end
+
+    def check_domain(domain)
+      @logger.debug "Checking domain: #{domain}"
+
+      result = @whois_client.check_domain(domain)
+
+      @metrics_mutex.synchronize do
+        @domain_metrics[domain] = result
       end
 
-      # If still no results but have domains, return waiting status
-      if result_hash.empty? && !@config.domains.empty?
-        @config.domains.each do |domain|
-          result_hash[domain] = {
-            expire_days: nil,
-            expired: false,
-            check_status: false,
-            last_check: Time.now,
-            error: @checking ? 'Check in progress' : 'Waiting for check'
-          }
-        end
+      if result[:error]
+        @logger.warn "Failed to check domain #{domain}: #{result[:error]}"
+      else
+        status = result[:days_until_expiry] <= @config.expire_threshold_days ? 'CRITICAL' : 'OK'
+        @logger.debug "Domain #{domain}: #{result[:days_until_expiry]} days until expiry (#{status})"
       end
 
-      result_hash
+      result
+    rescue StandardError => e
+      error_result = {
+        domain: domain,
+        days_until_expiry: -1,
+        expiry_date: nil,
+        error: e.message,
+        last_checked: Time.now.to_f
+      }
+
+      @metrics_mutex.synchronize do
+        @domain_metrics[domain] = error_result
+      end
+
+      @logger.error "Error checking domain #{domain}: #{e.message}"
+      error_result
+    end
+
+    def get_domain_metrics
+      @metrics_mutex.synchronize do
+        @domain_metrics.dup
+      end
+    end
+
+    def get_summary_metrics
+      metrics = get_domain_metrics
+
+      {
+        total_domains: metrics.size,
+        successful_checks: metrics.count { |_, m| m[:status] == 'success' },
+        failed_checks: metrics.count { |_, m| m[:status] == 'error' },
+        expired_domains: metrics.count { |_, m| m[:is_expired] },
+        expiring_soon_domains: metrics.count { |_, m| m[:will_expire_soon] },
+        last_check_time: metrics.values.map { |m| m[:last_check] }.compact.max
+      }
     end
 
     private
 
-    def perform_check
-      return if @checking || @config.domains.empty?
+    def initialize_domain_metrics
+      @config.domains.each do |domain|
+        @domain_metrics[domain] = {
+          domain: domain,
+          days_until_expiry: 0,
+          expiry_date: nil,
+          error: nil,
+          last_checked: 0
+        }
+      end
+    end
 
-      @checking = true
-      @logger.info "Starting check for #{@config.domains.size} domains"
+    def calculate_days_to_expire(expiry_date)
+      return nil unless expiry_date
 
-      # Use Promise.all to wait for all checks to complete
-      promises = @config.domains.map do |domain|
-        Concurrent::Promise.execute(executor: @thread_pool) do
-          check_single_domain(domain)
+      case expiry_date
+      when String
+        begin
+          parsed_date = Date.parse(expiry_date)
+          (parsed_date - Date.today).to_i
+        rescue StandardError
+          nil
         end
-      end
-
-      # Wait for all checks to complete
-      begin
-        results = Concurrent::Promise.zip(*promises).value!(30) # Set 30 seconds timeout
-        success_count = results.count { |r| r && r[:check_status] }
-        @logger.info "Domain check completed: #{success_count}/#{results.size} successful"
-      rescue Concurrent::TimeoutError
-        @logger.error 'Domain check timeout (30 seconds)'
-      rescue StandardError => e
-        @logger.error "Domain check error: #{e.message}"
-        @logger.debug e.backtrace.join("\n")
-      ensure
-        @checking = false
-      end
-    end
-
-    def check_single_domain(domain)
-      @logger.debug "Checking domain: #{domain}"
-      check_result = @whois_client.check_domain(domain)
-
-      result = {
-        expire_days: check_result[:days_until_expiry],
-        expired: check_result[:days_until_expiry] && check_result[:days_until_expiry] <= @config.expire_threshold_days,
-        check_status: check_result[:status] == :success,
-        last_check: Time.now,
-        error: check_result[:error]
-      }
-
-      @check_results[domain] = result
-      log_check_result(domain, check_result)
-
-      # Return result for statistics
-      result
-    rescue StandardError => e
-      @logger.error "Error checking domain #{domain}: #{e.message}"
-      @logger.debug e.backtrace.join("\n")
-
-      result = {
-        expire_days: nil,
-        expired: false,
-        check_status: false,
-        last_check: Time.now,
-        error: e.message
-      }
-
-      @check_results[domain] = result
-      result
-    end
-
-    def log_check_result(domain, result)
-      if result[:status] == :success
-        @logger.info "Domain #{domain}: #{result[:days_until_expiry]} days until expiry"
-      else
-        @logger.error "Domain #{domain} check failed: #{result[:error]}"
+      when Date
+        (expiry_date - Date.today).to_i
+      when Time
+        (expiry_date.to_date - Date.today).to_i
       end
     end
   end

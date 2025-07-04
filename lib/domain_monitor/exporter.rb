@@ -1,117 +1,82 @@
 # frozen_string_literal: true
 
-require 'sinatra/base'
-require 'prometheus/client'
-require 'prometheus/client/formats/text'
-require 'rack'
-
 module DomainMonitor
+  # Prometheus metrics exporter
   class Exporter < Sinatra::Base
-    def initialize(checker, config = Config.instance)
-      super()
-      @checker = checker
-      @config = config
-      @logger = config.create_logger('Exporter')
-      setup_metrics
-      @logger.info 'Metrics exporter initialized'
-    end
-
-    # Set Puma as server
+    # 设置 Puma 作为服务器
     set :server, :puma
-    # Listen on all interfaces
+    # 监听所有地址
     set :bind, '0.0.0.0'
-    # Set production environment
+    # 设置环境为生产环境
     set :environment, :production
 
-    def self.run_server!(checker, config)
-      set :port, config.metrics_port
-      logger = config.create_logger('Exporter')
-      app = new(checker, config)
+    # 创建注册表
+    prometheus = Prometheus::Client.registry
 
-      Thread.new do
-        logger.info "Starting metrics server on port #{config.metrics_port}"
-        begin
-          Rack::Handler.default.run(app, Host: '0.0.0.0', Port: config.metrics_port)
-        rescue StandardError => e
-          logger.error "Failed to start metrics server: #{e.message}"
-          logger.debug e.backtrace.join("\n")
-          raise
-        end
-      end
-    end
+    # 定义指标
+    EXPIRE_DAYS = Prometheus::Client::Gauge.new(:domain_expire_days,
+                                                docstring: 'Days until domain expiration (-1 if check failed)',
+                                                labels: %i[domain])
+    EXPIRED = Prometheus::Client::Gauge.new(:domain_expired,
+                                            docstring: 'Whether domain is expired or close to expiry (1) or not (0)',
+                                            labels: %i[domain])
+    CHECK_STATUS = Prometheus::Client::Gauge.new(:domain_check_status,
+                                                 docstring: 'Check status (1: success, 0: error)',
+                                                 labels: %i[domain])
 
-    # Health check endpoint
+    # 注册指标
+    prometheus.register(EXPIRE_DAYS)
+    prometheus.register(EXPIRED)
+    prometheus.register(CHECK_STATUS)
+
+    # 健康检查端点
     get '/health' do
-      content_type 'application/json'
-      '{"status":"up"}'
+      'OK'
     end
 
-    # Metrics endpoint
+    # 指标导出端点
     get '/metrics' do
       content_type 'text/plain; version=0.0.4'
-      collect_metrics
-      Prometheus::Client::Formats::Text.marshal(@registry)
+      Prometheus::Client::Formats::Text.marshal(prometheus)
     end
 
-    private
-
-    def setup_metrics
-      @registry = Prometheus::Client.registry
-
-      @expire_days = Prometheus::Client::Gauge.new(
-        :domain_expire_days,
-        docstring: 'Domain expiration days remaining',
-        labels: [:domain]
-      )
-
-      @expired = Prometheus::Client::Gauge.new(
-        :domain_expired,
-        docstring: 'Domain is expired or close to expiry (1: yes, 0: no)',
-        labels: [:domain]
-      )
-
-      @check_status = Prometheus::Client::Gauge.new(
-        :domain_check_status,
-        docstring: 'Domain check status (1: success, 0: error)',
-        labels: [:domain]
-      )
-
-      @registry.register(@expire_days)
-      @registry.register(@expired)
-      @registry.register(@check_status)
-      @logger.debug 'Metrics initialized'
+    # 更新域名过期天数指标
+    def self.update_expire_days(domain, days)
+      EXPIRE_DAYS.set(days, labels: { domain: domain })
     end
 
-    def collect_metrics
-      @logger.debug 'Collecting metrics'
-      @checker.results.each do |domain, result|
-        update_check_status(domain, result[:check_status])
-        update_expire_days(domain, result[:check_status] ? (result[:expire_days] || -1) : -1)
-        update_expired_status(domain, result[:check_status] && result[:expired])
+    # 更新域名过期状态指标
+    def self.update_expired_status(domain, is_expired)
+      EXPIRED.set(is_expired ? 1 : 0, labels: { domain: domain })
+    end
 
-        if result[:check_status]
-          if result[:expired]
-            @logger.warn "Domain #{domain} is expired or close to expiry (#{result[:expire_days]} days remaining)"
-          else
-            @logger.debug "Domain #{domain} is healthy (#{result[:expire_days]} days remaining)"
-          end
+    # 更新域名检查状态指标
+    def self.update_check_status(domain, success)
+      CHECK_STATUS.set(success ? 1 : 0, labels: { domain: domain })
+    end
+
+    # 批量更新所有指标
+    def self.update_metrics(checker)
+      checker.domain_metrics.each do |domain, metrics|
+        next unless metrics
+
+        if metrics[:error]
+          # 检查失败
+          update_expire_days(domain, -1)
+          update_expired_status(domain, false)
+          update_check_status(domain, false)
         else
-          @logger.error "Domain #{domain} check failed: #{result[:error]}"
+          # 检查成功
+          days_until_expiry = metrics[:days_until_expiry] || -1
+          update_expire_days(domain, days_until_expiry)
+
+          # 判断是否过期或接近过期
+          is_expired_or_close = days_until_expiry >= 0 && days_until_expiry <= Config.expire_threshold_days
+          update_expired_status(domain, is_expired_or_close)
+
+          update_check_status(domain, true)
         end
       end
-      @logger.debug 'Metrics collection completed'
-    end
-
-    def update_check_status(domain, status)
-      @check_status.set(status ? 1 : 0, labels: { domain: domain })
-    end
-
-    def update_expire_days(domain, days)
-      @expire_days.set(days, labels: { domain: domain })
-    end
-
-    def update_expired_status(domain, expired)
-      @expired.set(expired ? 1 : 0, labels: { domain: domain })
     end
   end
 end

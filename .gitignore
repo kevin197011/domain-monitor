@@ -1,6 +1,3 @@
-# Ignore actual environment variables file
-.env
-
 # But allow example and template files
 !.env.example
 !.env.template

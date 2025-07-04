@@ -1,180 +1,129 @@
 # frozen_string_literal: true
 
-require 'net/http'
-require 'uri'
-require 'json'
-require 'logger'
-
 module DomainMonitor
+  # Nacos configuration client class
+  # Handles communication with Nacos configuration center and configuration updates
   class NacosClient
-    def initialize(config = Config.instance)
-      @config = config
-      @logger = config.create_logger('Nacos')
-      @polling_interval = 30 # Polling interval in seconds
-      @running = false
-      @access_token = nil
-      @token_expires_at = nil
-
-      # Parse Nacos server address
-      @uri = URI.parse(@config.nacos_addr)
-      @http = Net::HTTP.new(@uri.host, @uri.port)
-      @http.use_ssl = @uri.scheme == 'https'
-
-      # Authenticate if username and password are provided
-      authenticate if authentication_required?
+    def initialize
+      @config = Config
+      @logger = Logger.create('Nacos')
+      @last_md5 = nil
+      @running = Concurrent::AtomicBoolean.new(false)
     end
 
-    def start_listening(&callback)
-      @logger.info 'Starting Nacos config listener'
-      @running = true
+    # Start listening for configuration changes from Nacos
+    # Runs in a separate thread and periodically checks for updates
+    def start_listening
+      return if @running.true?
 
-      # Initial config load
-      current_config = fetch_config
-      if current_config
-        @logger.info 'Initial config loaded from Nacos'
-        callback&.call(current_config)
-      else
-        @logger.warn 'Failed to load initial config from Nacos'
-      end
+      @running.make_true
+      @logger.info 'Starting Nacos config listener...'
+      @logger.debug "Configuration details: dataId=#{@config.nacos_data_id}, group=#{@config.nacos_group}, namespace=#{@config.nacos_namespace}"
+      @logger.info "Initial polling interval: #{@config.nacos_poll_interval} seconds"
 
-      # Start polling in a separate thread
-      @polling_thread = Thread.new do
-        last_md5 = calculate_md5(current_config)
-
-        while @running
+      Thread.new do
+        while @running.true?
           begin
-            sleep @polling_interval
-            new_config = fetch_config
-            next unless new_config
-
-            new_md5 = calculate_md5(new_config)
-            if new_md5 != last_md5
-              @logger.info 'Config update detected in Nacos'
-              callback&.call(new_config)
-              last_md5 = new_md5
-            else
-              @logger.debug 'No config changes detected'
-            end
+            check_config_update
+            # Use the potentially updated poll interval from Nacos config
+            sleep @config.nacos_poll_interval
           rescue StandardError => e
-            @logger.error "Nacos polling error: #{e.message}"
+            @logger.error "Configuration update error: #{e.message}"
             @logger.debug e.backtrace.join("\n")
+            sleep [@config.nacos_poll_interval, 10].max # Use max of poll interval or 10 seconds on error
           end
         end
       end
-    rescue StandardError => e
-      @logger.error "Failed to start Nacos client: #{e.message}"
-      @logger.debug e.backtrace.join("\n")
-      raise
     end
 
-    def stop
-      @logger.info 'Stopping Nacos config listener'
-      @running = false
-      @polling_thread&.join
+    # Stop listening for configuration changes
+    def stop_listening
+      @running.make_false
       @logger.info 'Nacos config listener stopped'
     end
 
     private
 
-    def authentication_required?
-      !@config.nacos_username.nil? && !@config.nacos_username.empty? &&
-        !@config.nacos_password.nil? && !@config.nacos_password.empty?
-    end
+    # Check for configuration updates from Nacos
+    # Uses MD5 hash to detect changes and updates local configuration if needed
+    def check_config_update
+      uri = URI.join(@config.nacos_addr, '/nacos/v1/cs/configs')
 
-    def authenticate
-      @logger.info 'Authenticating with Nacos server'
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = uri.scheme == 'https'
+      http.read_timeout = 10
+      http.open_timeout = 5
 
-      # Build authentication request
-      auth_path = '/nacos/v1/auth/login'
-      params = {
-        username: @config.nacos_username,
-        password: @config.nacos_password
-      }
+      # Use GET request with parameters
+      uri.query = URI.encode_www_form(config_params)
+      response = http.get(uri.request_uri)
 
-      request = Net::HTTP::Post.new(auth_path)
-      request.set_form_data(params)
-      request['Content-Type'] = 'application/x-www-form-urlencoded'
+      if response.is_a?(Net::HTTPSuccess)
+        yaml_content = response.body
 
-      response = @http.request(request)
+        # Check if response is empty or contains error
+        if yaml_content.nil? || yaml_content.strip.empty?
+          @logger.warn 'Received empty configuration from Nacos'
+          return
+        end
 
-      case response
-      when Net::HTTPSuccess
-        auth_data = JSON.parse(response.body)
-        @access_token = auth_data['accessToken']
-        @token_expires_at = Time.now + (auth_data['tokenTtl'] || 18_000) # Default 5 hours
-        @logger.info 'Successfully authenticated with Nacos'
-        @logger.debug "Access token expires at: #{@token_expires_at}"
+        current_md5 = Digest::MD5.hexdigest(yaml_content)
+
+        if @last_md5 != current_md5
+          @last_md5 = current_md5
+
+          begin
+            config_data = YAML.safe_load(yaml_content)
+            @logger.debug "Received configuration update: #{config_data.inspect}"
+
+            if config_data.is_a?(Hash)
+              if @config.update_app_config(config_data)
+                @logger.info 'Configuration updated successfully'
+                @logger.debug "Current configuration: metrics_port=#{@config.metrics_port}, check_interval=#{@config.check_interval}s"
+                @logger.debug "Monitored domains: #{@config.domains.join(', ')}"
+
+                # Update logger level if it changed
+                if config_data['settings'] && config_data['settings']['log_level']
+                  new_log_level = config_data['settings']['log_level'].upcase
+                  Logger.update_all_level(::Logger.const_get(new_log_level))
+                  @logger.info "Log level updated to: #{new_log_level}"
+                  @logger.debug "Current metrics port: #{@config.metrics_port}"
+                end
+              end
+            else
+              @logger.error "Invalid configuration format: expected Hash, got #{config_data.class}"
+              raise 'Invalid configuration format: not a valid YAML configuration'
+            end
+          rescue Psych::SyntaxError => e
+            @logger.error "YAML parsing error: #{e.message}"
+            @logger.debug "Raw YAML content: #{yaml_content}"
+            raise "YAML parsing failed: #{e.message}"
+          end
+        end
       else
-        @logger.error "Failed to authenticate with Nacos: #{response.code} - #{response.body}"
-        raise "Nacos authentication failed: #{response.code}"
-      end
-    rescue JSON::ParserError => e
-      @logger.error "Failed to parse authentication response: #{e.message}"
-      raise "Nacos authentication response parsing failed: #{e.message}"
-    rescue StandardError => e
-      @logger.error "Authentication error: #{e.message}"
-      @logger.debug e.backtrace.join("\n")
-      raise
-    end
-
-    def ensure_authentication
-      return unless authentication_required?
-
-      # Check if token is expired or will expire soon (5 minutes buffer)
-      if @access_token.nil? || @token_expires_at.nil? ||
-         Time.now >= (@token_expires_at - 300)
-        @logger.info 'Access token expired or expiring soon, re-authenticating'
-        authenticate
+        @logger.error "Failed to fetch configuration: HTTP #{response.code} - #{response.body}"
+        raise "Failed to fetch configuration: HTTP #{response.code}"
       end
     end
 
-    def add_auth_header(request)
-      return unless authentication_required? && @access_token
-
-      request['Authorization'] = "Bearer #{@access_token}"
-    end
-
-    def fetch_config
-      # Ensure authentication is valid
-      ensure_authentication
-
-      # Build request parameters
+    # Build configuration parameters for Nacos API request
+    # @return [Hash] Configuration parameters
+    def config_params
       params = {
-        tenant: @config.nacos_namespace,
         dataId: @config.nacos_data_id,
         group: @config.nacos_group
       }
 
-      # Build request path
-      path = "/nacos/v1/cs/configs?#{URI.encode_www_form(params)}"
+      # Add namespace if specified
+      params[:tenant] = @config.nacos_namespace if @config.nacos_namespace && !@config.nacos_namespace.empty?
 
-      # Send request
-      request = Net::HTTP::Get.new(path)
-      request['Content-Type'] = 'application/x-www-form-urlencoded'
-
-      # Add authentication header if required
-      add_auth_header(request)
-
-      @logger.debug "Fetching config from Nacos: #{path}"
-      response = @http.request(request)
-
-      case response
-      when Net::HTTPSuccess
-        @logger.debug 'Successfully fetched config from Nacos'
-        response.body
-      else
-        @logger.error "Failed to fetch config from Nacos: #{response.code} - #{response.body}"
-        nil
+      # Add authentication if credentials are provided
+      if @config.nacos_username && @config.nacos_password
+        params[:username] = @config.nacos_username
+        params[:password] = @config.nacos_password
       end
-    rescue StandardError => e
-      @logger.error "Failed to fetch config from Nacos: #{e.message}"
-      @logger.debug e.backtrace.join("\n")
-      nil
-    end
 
-    def calculate_md5(content)
-      require 'digest/md5'
-      Digest::MD5.hexdigest(content.to_s)
+      params
     end
   end
 end
