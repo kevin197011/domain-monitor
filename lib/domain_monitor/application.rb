@@ -8,6 +8,8 @@ module DomainMonitor
     def initialize
       @logger = Logger.create('System')
       @logger.level = ::Logger::INFO # 初始设置为 INFO，后续从配置更新
+      @checker_thread = nil
+      @config_change_trigger = Concurrent::Event.new
     end
 
     def start
@@ -24,17 +26,11 @@ module DomainMonitor
       setup_logger
       setup_components
 
-      # 首次同步检查
-      logger.info 'Starting domain checker...'
-      @checker.check_all_domains
+      # 初次阻塞域名检查 - 确保应用启动时有完整的域名状态
+      perform_initial_domain_check
 
-      # 更新首次检查的指标
-      Exporter.update_metrics(@checker)
-      successful_checks = @checker.domain_metrics.count { |_, m| !m[:error] }
-      logger.info "Initial domain check completed: #{successful_checks}/#{Config.domains.length} successful"
-
-      # 启动异步检查线程
-      start_checker_thread
+      # 启动异步检查线程 - 基于Nacos配置的定时检测
+      start_async_checker
 
       # 启动指标服务器
       start_exporter
@@ -42,6 +38,13 @@ module DomainMonitor
       logger.error "Startup failed: #{e.message}"
       logger.error e.backtrace.join("\n")
       exit 1
+    end
+
+    # Nacos配置变化时的回调方法
+    def on_config_changed
+      logger.info 'Nacos configuration changed, triggering immediate domain check...'
+      # 触发立即检测
+      @config_change_trigger.set
     end
 
     private
@@ -92,41 +95,110 @@ module DomainMonitor
     def start_nacos_client
       logger.info 'Starting Nacos config listener...'
       @nacos_client = NacosClient.new
+      # 设置配置变化回调
+      @nacos_client.on_config_change_callback = method(:on_config_changed)
       @nacos_client.start_listening
     end
 
-    def start_checker_thread
-      logger.info 'Starting domain checker thread...'
-      Thread.new do
-        # 等待一个检查周期后开始异步检查
+    def perform_initial_domain_check
+      if Config.domains.empty?
+        logger.warn 'No domains configured, skipping initial domain check'
+        return
+      end
+
+      # 获取当前Nacos配置
+      initial_domains = Config.domains
+      initial_concurrent = Config.max_concurrent_checks
+      initial_threshold = Config.expire_threshold_days
+
+      logger.info '=== Performing initial domain check (blocking) ==='
+      logger.info "Checking #{initial_domains.length} domains synchronously (concurrency: #{initial_concurrent})..."
+
+      start_time = Time.now
+
+      # 使用当前Nacos配置执行初次域名检查
+      @checker.check_all_domains(Config)
+
+      # 更新指标
+      Exporter.update_metrics(@checker)
+      successful_checks = @checker.domain_metrics.count { |_, m| !m[:error] }
+      elapsed_time = (Time.now - start_time).round(2)
+
+      logger.info "Initial domain check completed in #{elapsed_time}s: #{successful_checks}/#{initial_domains.length} successful"
+
+      # 输出每个域名的检查结果
+      @checker.domain_metrics.each do |domain, metrics|
+        if metrics[:error]
+          logger.warn "  - #{domain}: FAILED (#{metrics[:error]})"
+        else
+          status = metrics[:days_until_expiry] <= initial_threshold ? 'CRITICAL' : 'OK'
+          logger.info "  - #{domain}: #{metrics[:days_until_expiry]} days (#{status})"
+        end
+      end
+
+      logger.info '=== Initial domain check completed, starting async monitoring ==='
+    end
+
+    def start_async_checker
+      logger.info 'Starting asynchronous domain checker thread...'
+      logger.info "Will check domains every #{Config.check_interval} seconds based on Nacos configuration"
+
+      @checker_thread = Thread.new do
+        # 等待第一个检查周期
         sleep Config.check_interval
 
         loop do
-          logger.info "Scheduled check: Checking #{Config.domains.length} domains..."
-
-          begin
-            # 执行域名检查
-            @checker.check_all_domains
-
-            # 更新指标
-            Exporter.update_metrics(@checker)
-            successful_checks = @checker.domain_metrics.count { |_, m| !m[:error] }
-            logger.info "Scheduled domain check completed: #{successful_checks}/#{Config.domains.length} successful"
-          rescue StandardError => e
-            logger.error "Domain check cycle failed: #{e.message}"
-            logger.error e.backtrace.join("\n")
+          # 等待下一个检查周期或配置变化触发
+          if @config_change_trigger.wait(Config.check_interval)
+            # 配置变化触发的检测
+            logger.info '=== Config change triggered domain check ==='
+            @config_change_trigger.reset
+          else
+            # 定时触发的检测
+            logger.info '=== Scheduled domain check ==='
           end
 
-          # 等待下一个检查周期
-          sleep Config.check_interval
+          # 重新读取当前Nacos配置（可能已更新）
+          current_domains = Config.domains
+          current_interval = Config.check_interval
+          current_concurrent = Config.max_concurrent_checks
+
+          if current_domains.empty?
+            logger.debug 'No domains configured, skipping check'
+          else
+            logger.info "Checking #{current_domains.length} domains (interval: #{current_interval}s, concurrency: #{current_concurrent})"
+
+            begin
+              start_time = Time.now
+
+              # 更新checker的域名列表（处理新增/删除的域名）
+              @checker.update_domain_list(current_domains)
+
+              # 使用当前Nacos配置执行域名检查
+              @checker.check_all_domains(Config)
+
+              # 更新指标
+              Exporter.update_metrics(@checker)
+              successful_checks = @checker.domain_metrics.count { |_, m| !m[:error] }
+              elapsed_time = (Time.now - start_time).round(2)
+
+              logger.info "Domain check completed in #{elapsed_time}s: #{successful_checks}/#{current_domains.length} successful"
+            rescue StandardError => e
+              logger.error "Domain check cycle failed: #{e.message}"
+              logger.error e.backtrace.join("\n")
+            end
+          end
         end
       rescue StandardError => e
-        logger.error "Checker thread crashed: #{e.message}"
+        logger.error "Async checker thread crashed: #{e.message}"
         logger.error e.backtrace.join("\n")
         # 重启线程
+        logger.info 'Restarting async checker thread in 10 seconds...'
         sleep 10
         retry
       end
+
+      logger.info 'Async domain checker thread started successfully'
     end
 
     def start_exporter

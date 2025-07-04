@@ -1,0 +1,24 @@
+# 域名列表
+domains:
+  - qq.com
+  - baidu.com
+  - 163.net
+  - google.com
+  - github.com
+  - devops.com
+
+# 全局设置
+settings:
+  # WHOIS 查询设置
+  whois_retry_times: 3        # WHOIS 查询失败重试次数
+  whois_retry_interval: 5     # 重试间隔（秒）
+
+  # 域名检查设置
+  check_interval: 21600       # 域名检查间隔（秒）目前设置的是6小时
+  expire_threshold_days: 15    # 域名过期阈值天数
+  max_concurrent_checks: 50   # 并发检查线程数
+
+  # 监控指标设置
+  metrics_port: 9394         # Prometheus 指标暴露端口
+  log_level: info            # Log level (debug/info/warn/error/fatal)
+  nacos_poll_interval: 60 # nacos 配置轮训检测频率60s

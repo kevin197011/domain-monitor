@@ -4,11 +4,14 @@ module DomainMonitor
   # Nacos configuration client class
   # Handles communication with Nacos configuration center and configuration updates
   class NacosClient
+    attr_accessor :on_config_change_callback
+
     def initialize
       @config = Config
       @logger = Logger.create('Nacos')
       @last_md5 = nil
       @running = Concurrent::AtomicBoolean.new(false)
+      @on_config_change_callback = nil
     end
 
     # Start listening for configuration changes from Nacos
@@ -65,7 +68,7 @@ module DomainMonitor
       if response.is_a?(Net::HTTPSuccess)
         yaml_content = response.body
         @logger.debug "Raw response body length: #{yaml_content.length}"
-        @logger.debug "Raw response body (first 500 chars): #{yaml_content[0..500]}"
+        @logger.debug "Raw response body content: #{yaml_content}"
 
         # Check if response is empty or contains error
         if yaml_content.nil? || yaml_content.strip.empty?
@@ -99,6 +102,17 @@ module DomainMonitor
                   Logger.update_all_level(::Logger.const_get(new_log_level))
                   @logger.info "Log level updated to: #{new_log_level}"
                   @logger.debug "Current metrics port: #{@config.metrics_port}"
+                end
+
+                # 触发配置变化回调
+                if @on_config_change_callback
+                  @logger.debug 'Triggering config change callback...'
+                  begin
+                    @on_config_change_callback.call
+                  rescue StandardError => e
+                    @logger.error "Config change callback failed: #{e.message}"
+                    @logger.debug e.backtrace.join("\n")
+                  end
                 end
               else
                 @logger.error 'Failed to update configuration'

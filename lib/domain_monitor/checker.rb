@@ -15,18 +15,23 @@ module DomainMonitor
       initialize_domain_metrics
     end
 
-    def check_all_domains
-      return if @config.domains.empty?
+    def check_all_domains(override_config = nil)
+      # 使用传入的配置或默认配置
+      current_config = override_config || @config
+      current_domains = current_config.domains
 
-      @logger.info "Starting domain check for #{@config.domains.size} domains"
+      return if current_domains.empty?
 
-      # 使用线程池并发检查域名
-      thread_pool = Concurrent::FixedThreadPool.new(@config.max_concurrent_checks)
+      max_concurrent = current_config.max_concurrent_checks
+      @logger.info "Starting domain check for #{current_domains.size} domains (concurrency: #{max_concurrent})"
+
+      # 使用线程池并发检查域名，并发数基于当前配置
+      thread_pool = Concurrent::FixedThreadPool.new(max_concurrent)
       futures = []
 
-      @config.domains.each do |domain|
+      current_domains.each do |domain|
         futures << Concurrent::Future.execute(executor: thread_pool) do
-          check_domain(domain)
+          check_domain(domain, current_config)
         end
       end
 
@@ -35,7 +40,7 @@ module DomainMonitor
       thread_pool.shutdown
       thread_pool.wait_for_termination(30)
 
-      @logger.info 'Domain check cycle completed'
+      @logger.debug "Domain check cycle completed using #{max_concurrent} concurrent threads"
     rescue StandardError => e
       @logger.error "Error in domain check cycle: #{e.message}"
       @logger.debug e.backtrace.join("\n")
@@ -43,7 +48,8 @@ module DomainMonitor
       thread_pool&.shutdown
     end
 
-    def check_domain(domain)
+    def check_domain(domain, config = nil)
+      current_config = config || @config
       @logger.debug "Checking domain: #{domain}"
 
       result = @whois_client.check_domain(domain)
@@ -55,7 +61,7 @@ module DomainMonitor
       if result[:error]
         @logger.warn "Failed to check domain #{domain}: #{result[:error]}"
       else
-        status = result[:days_until_expiry] <= @config.expire_threshold_days ? 'CRITICAL' : 'OK'
+        status = result[:days_until_expiry] <= current_config.expire_threshold_days ? 'CRITICAL' : 'OK'
         @logger.debug "Domain #{domain}: #{result[:days_until_expiry]} days until expiry (#{status})"
       end
 
@@ -94,6 +100,31 @@ module DomainMonitor
         expiring_soon_domains: metrics.count { |_, m| m[:will_expire_soon] },
         last_check_time: metrics.values.map { |m| m[:last_check] }.compact.max
       }
+    end
+
+    # 更新内部域名列表，清理不再监控的域名指标
+    def update_domain_list(new_domains)
+      @metrics_mutex.synchronize do
+        # 移除不再监控的域名
+        @domain_metrics.each_key do |domain|
+          @domain_metrics.delete(domain) unless new_domains.include?(domain)
+        end
+
+        # 初始化新域名的指标
+        new_domains.each do |domain|
+          next if @domain_metrics.key?(domain)
+
+          @domain_metrics[domain] = {
+            domain: domain,
+            days_until_expiry: 0,
+            expiry_date: nil,
+            error: nil,
+            last_checked: 0
+          }
+        end
+      end
+
+      @logger.debug "Updated domain list: #{new_domains.size} domains"
     end
 
     private
