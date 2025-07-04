@@ -80,7 +80,7 @@ module DomainMonitor
 
       def load_nacos_connection_config
         # Load Nacos connection info from environment
-        @nacos_addr = ENV['NACOS_SERVER_ADDR']
+        @nacos_addr = ENV['NACOS_ADDR']
         @nacos_namespace = ENV['NACOS_NAMESPACE']
         @nacos_group = ENV['NACOS_GROUP'] || 'DEFAULT_GROUP'
         @nacos_data_id = ENV['NACOS_DATA_ID'] || 'domain-monitor-config'
