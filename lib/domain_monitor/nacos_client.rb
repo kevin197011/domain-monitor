@@ -19,6 +19,7 @@ module DomainMonitor
       @running.make_true
       @logger.info 'Starting Nacos config listener...'
       @logger.debug "Configuration details: dataId=#{@config.nacos_data_id}, group=#{@config.nacos_group}, namespace=#{@config.nacos_namespace}"
+      @logger.debug "Nacos server: #{@config.nacos_addr}"
       @logger.info "Initial polling interval: #{@config.nacos_poll_interval} seconds"
 
       Thread.new do
@@ -56,10 +57,15 @@ module DomainMonitor
 
       # Use GET request with parameters
       uri.query = URI.encode_www_form(config_params)
+      @logger.debug "Requesting config from: #{uri}"
+
       response = http.get(uri.request_uri)
+      @logger.debug "Response status: #{response.code}"
 
       if response.is_a?(Net::HTTPSuccess)
         yaml_content = response.body
+        @logger.debug "Raw response body length: #{yaml_content.length}"
+        @logger.debug "Raw response body (first 500 chars): #{yaml_content[0..500]}"
 
         # Check if response is empty or contains error
         if yaml_content.nil? || yaml_content.strip.empty?
@@ -68,19 +74,24 @@ module DomainMonitor
         end
 
         current_md5 = Digest::MD5.hexdigest(yaml_content)
+        @logger.debug "Content MD5: #{current_md5}, Last MD5: #{@last_md5}"
 
         if @last_md5 != current_md5
           @last_md5 = current_md5
 
           begin
             config_data = YAML.safe_load(yaml_content)
-            @logger.debug "Received configuration update: #{config_data.inspect}"
+            @logger.debug "Parsed YAML config: #{config_data.inspect}"
+            @logger.debug "Config data class: #{config_data.class}"
 
             if config_data.is_a?(Hash)
+              @logger.debug "Domains in config: #{config_data['domains'].inspect}"
+              @logger.debug "Settings in config: #{config_data['settings'].inspect}"
+
               if @config.update_app_config(config_data)
                 @logger.info 'Configuration updated successfully'
                 @logger.debug "Current configuration: metrics_port=#{@config.metrics_port}, check_interval=#{@config.check_interval}s"
-                @logger.debug "Monitored domains: #{@config.domains.join(', ')}"
+                @logger.debug "Monitored domains: #{@config.domains.inspect}"
 
                 # Update logger level if it changed
                 if config_data['settings'] && config_data['settings']['log_level']
@@ -89,9 +100,12 @@ module DomainMonitor
                   @logger.info "Log level updated to: #{new_log_level}"
                   @logger.debug "Current metrics port: #{@config.metrics_port}"
                 end
+              else
+                @logger.error 'Failed to update configuration'
               end
             else
               @logger.error "Invalid configuration format: expected Hash, got #{config_data.class}"
+              @logger.debug "Raw config data: #{config_data.inspect}"
               raise 'Invalid configuration format: not a valid YAML configuration'
             end
           rescue Psych::SyntaxError => e
@@ -99,6 +113,8 @@ module DomainMonitor
             @logger.debug "Raw YAML content: #{yaml_content}"
             raise "YAML parsing failed: #{e.message}"
           end
+        else
+          @logger.debug 'Configuration unchanged (same MD5)'
         end
       else
         @logger.error "Failed to fetch configuration: HTTP #{response.code} - #{response.body}"
@@ -123,6 +139,7 @@ module DomainMonitor
         params[:password] = @config.nacos_password
       end
 
+      @logger.debug "Request params: #{params.inspect}"
       params
     end
   end

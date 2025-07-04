@@ -13,13 +13,25 @@ module DomainMonitor
     def start
       logger.debug 'Starting application...'
       setup_configuration
+
+      if Config.nacos_enabled?
+        logger.info 'Nacos configuration enabled, waiting for remote config...'
+        start_nacos_client
+        # 等待首次配置加载
+        wait_for_initial_config
+      end
+
       setup_logger
       setup_components
-      start_nacos_client if Config.nacos_enabled?
 
       # 首次同步检查
       logger.info 'Starting domain checker...'
       @checker.check_all_domains
+
+      # 更新首次检查的指标
+      Exporter.update_metrics(@checker)
+      successful_checks = @checker.domain_metrics.count { |_, m| !m[:error] }
+      logger.info "Initial domain check completed: #{successful_checks}/#{Config.domains.length} successful"
 
       # 启动异步检查线程
       start_checker_thread
@@ -38,6 +50,20 @@ module DomainMonitor
       logger.debug 'Loading configuration...'
       Config.load
       logger.debug "Configuration loaded: #{Config.inspect}"
+    end
+
+    def wait_for_initial_config
+      logger.info 'Waiting for initial configuration from Nacos...'
+      max_wait = 30 # 最多等待30秒
+      start_time = Time.now
+
+      sleep 1 while Config.domains.empty? && (Time.now - start_time) < max_wait
+
+      if Config.domains.empty?
+        logger.warn 'No domains loaded from Nacos after 30 seconds, continuing with empty domain list'
+      else
+        logger.info "Successfully loaded #{Config.domains.size} domains from Nacos"
+      end
     end
 
     def setup_logger
@@ -76,28 +102,30 @@ module DomainMonitor
         sleep Config.check_interval
 
         loop do
-          logger.info "Checking #{Config.domains.length} domains..."
+          logger.info "Scheduled check: Checking #{Config.domains.length} domains..."
 
-          # 使用 Promise 进行异步检查
-          Concurrent::Promise.execute do
+          begin
+            # 执行域名检查
             @checker.check_all_domains
-          end.on_success do |_results|
+
             # 更新指标
             Exporter.update_metrics(@checker)
             successful_checks = @checker.domain_metrics.count { |_, m| !m[:error] }
-            logger.info "Domain check completed: #{successful_checks}/#{Config.domains.length} successful"
-          end.on_error do |error|
-            logger.error "Domain check cycle failed: #{error.message}"
-            logger.error error.backtrace.join("\n")
+            logger.info "Scheduled domain check completed: #{successful_checks}/#{Config.domains.length} successful"
+          rescue StandardError => e
+            logger.error "Domain check cycle failed: #{e.message}"
+            logger.error e.backtrace.join("\n")
           end
 
           # 等待下一个检查周期
           sleep Config.check_interval
-        rescue StandardError => e
-          logger.error "Checker thread error: #{e.message}"
-          logger.error e.backtrace.join("\n")
-          sleep [Config.check_interval, 10].max
         end
+      rescue StandardError => e
+        logger.error "Checker thread crashed: #{e.message}"
+        logger.error e.backtrace.join("\n")
+        # 重启线程
+        sleep 10
+        retry
       end
     end
 

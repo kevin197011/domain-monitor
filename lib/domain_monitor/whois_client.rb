@@ -18,26 +18,40 @@ module DomainMonitor
           response = @whois.lookup(domain)
         end
 
-        if response&.parser&.expires_on
-          expiry_date = response.parser.expires_on
-          days_until_expiry = calculate_days_until_expiry(expiry_date)
+        # Try to parse the response to get expiry date
+        begin
+          parser = response.parser
+          expiry_date = parser.expires_on
 
-          result = {
-            domain: domain,
-            days_until_expiry: days_until_expiry,
-            expiry_date: expiry_date.to_s,
-            error: nil,
-            last_checked: Time.now.to_f
-          }
+          if expiry_date
+            days_until_expiry = calculate_days_until_expiry(expiry_date)
 
-          @logger.debug "Domain #{domain} expires on #{expiry_date} (#{days_until_expiry} days)"
-          result
-        else
+            result = {
+              domain: domain,
+              days_until_expiry: days_until_expiry,
+              expiry_date: expiry_date.to_s,
+              error: nil,
+              last_checked: Time.now.to_f
+            }
+
+            @logger.debug "Domain #{domain} expires on #{expiry_date} (#{days_until_expiry} days)"
+            result
+          else
+            {
+              domain: domain,
+              days_until_expiry: -1,
+              expiry_date: nil,
+              error: 'No expiry date found in WHOIS response',
+              last_checked: Time.now.to_f
+            }
+          end
+        rescue StandardError => e
+          @logger.warn "Failed to parse WHOIS response for #{domain}: #{e.message}"
           {
             domain: domain,
             days_until_expiry: -1,
             expiry_date: nil,
-            error: 'No expiry date found',
+            error: "Parse error: #{e.message}",
             last_checked: Time.now.to_f
           }
         end

@@ -153,7 +153,7 @@ module DomainMonitor
       end
 
       def logger
-        @logger ||= ::Logger.new($stdout)
+        @logger ||= Logger.create('Config')
       end
     end
   end
