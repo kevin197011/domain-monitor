@@ -165,7 +165,7 @@ module DomainMonitor
             current_interval = Config.check_interval
             current_concurrent = Config.max_concurrent_checks
 
-            logger.debug '[AsyncChecker] Current domains: ', current_domains.inspect
+            logger.debug "[AsyncChecker] Current domains: #{current_domains.inspect}"
             logger.debug "[AsyncChecker] Current interval: #{current_interval}, concurrency: #{current_concurrent}"
 
             if current_domains.empty?
