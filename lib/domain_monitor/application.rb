@@ -34,6 +34,10 @@ module DomainMonitor
 
       # 启动指标服务器
       start_exporter
+
+      # === 新增优雅退出处理 ===
+      trap_signals
+      wait_for_shutdown
     rescue StandardError => e
       logger.error "Startup failed: #{e.message}"
       logger.error e.backtrace.join("\n")
@@ -46,6 +50,28 @@ module DomainMonitor
       logger.debug 'Setting config_change_trigger event.'
       @config_change_trigger.set
       logger.debug 'config_change_trigger event set.'
+    end
+
+    # 捕获 SIGINT/SIGTERM 信号，优雅退出
+    def trap_signals
+      @shutdown = false
+      %w[INT TERM].each do |sig|
+        Signal.trap(sig) do
+          logger.info "Received signal #{sig}, shutting down gracefully..."
+          @shutdown = true
+        end
+      end
+    end
+
+    # 等待关闭信号并 join checker 线程
+    def wait_for_shutdown
+      sleep 0.5 until @shutdown
+      logger.info 'Waiting for checker thread to finish...'
+      if @checker_thread&.alive?
+        @checker_thread.join(5) # 最多等5秒
+        logger.info 'Checker thread exited.'
+      end
+      logger.info 'Shutdown complete.'
     end
 
     private
