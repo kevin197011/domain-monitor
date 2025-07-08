@@ -11,15 +11,21 @@ module DomainMonitor
       @config_change_trigger = Concurrent::Event.new
       @shutdown = false
       @checker_task = nil
+      @exporter = Exporter.new
     end
 
     def start
+      # 启动时写入自身 pid 文件，确保 Docker 环境下也有 pid 文件
+      require_relative 'utils'
+      DomainMonitor::Utils.write_pid_file
       setup_configuration
+      logger.debug "[DEBUG] Config.domains after setup_configuration: #{Config.domains.inspect}"
       start_nacos_client if Config.nacos_enabled?
       setup_logger
       setup_components
       trap_signals
       start_exporter
+      run_domain_check # 启动后立即检查一次
       start_checker_task
       wait_for_shutdown
     rescue StandardError => e
@@ -31,6 +37,17 @@ module DomainMonitor
     # Nacos配置变化时的回调方法
     def on_config_changed
       logger.info 'Nacos configuration changed, triggering immediate domain check...'
+      logger.debug "[DEBUG] Config.domains after Nacos config change: #{Config.domains.inspect}"
+      # 检查域名是否有删除
+      @last_domains ||= Set.new(Config.domains)
+      current_domains = Set.new(Config.domains)
+      deleted_domains = @last_domains - current_domains
+      if deleted_domains.any?
+        logger.warn "Detected deleted domains from Nacos: #{deleted_domains.to_a.join(', ')}. Triggering Puma restart..."
+        Utils.restart_puma
+      end
+      @last_domains = current_domains
+      run_domain_check # 立即检查一次
       @config_change_trigger.set
     end
 
@@ -125,6 +142,7 @@ module DomainMonitor
     end
 
     def run_domain_check
+      logger.debug "[DEBUG] run_domain_check: Config.domains = #{Config.domains.inspect}"
       domains = Config.domains
       if domains.empty?
         logger.warn 'No domains configured, skipping check.'
@@ -132,9 +150,9 @@ module DomainMonitor
       end
       begin
         @checker.update_domain_list(domains)
+        logger.debug "[DEBUG] @checker.domain_metrics before check: #{@checker.domain_metrics.inspect}"
         @checker.check_all_domains(Config)
-        Exporter.update_metrics(@checker)
-        logger.info "Checked #{domains.size} domains."
+        logger.debug "[DEBUG] @checker.domain_metrics after check: #{@checker.domain_metrics.inspect}"
       rescue StandardError => e
         logger.error "Domain check failed: #{e.message}"
       end
@@ -142,9 +160,20 @@ module DomainMonitor
 
     def start_exporter
       logger.debug 'Starting metrics exporter...'
-      # 设置 Sinatra 服务器选项
-      Exporter.set :port, Config.metrics_port
-      Exporter.run! host: '0.0.0.0'
+      app = proc do |env|
+        req = Rack::Request.new(env)
+        case req.path
+        when '/metrics'
+          exporter = @exporter
+          exporter.update_metrics(@checker) # 确保每次导出前刷新指标
+          [200, { 'Content-Type' => 'text/plain; version=0.0.4' }, [Prometheus::Client::Formats::Text.marshal(exporter.prometheus)]]
+        when '/health'
+          [200, { 'Content-Type' => 'text/plain' }, ['OK']]
+        else
+          [404, { 'Content-Type' => 'text/plain' }, ['Not found']]
+        end
+      end
+      Rack::Handler::Puma.run(app, Port: Config.metrics_port, Host: '0.0.0.0')
     end
   end
 end

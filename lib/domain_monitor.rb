@@ -35,4 +35,5 @@ module DomainMonitor
   autoload :Checker, 'domain_monitor/checker'
   autoload :Exporter, 'domain_monitor/exporter'
   autoload :Application, 'domain_monitor/application'
+  autoload :Utils, 'domain_monitor/utils'
 end
