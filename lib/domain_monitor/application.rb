@@ -8,8 +8,9 @@ module DomainMonitor
     def initialize
       @logger = Logger.create('System')
       @logger.level = ::Logger::INFO # 初始设置为 INFO，后续从配置更新
-      @checker_thread = nil
       @config_change_trigger = Concurrent::Event.new
+      @shutdown = false
+      @checker_task = nil
     end
 
     def start
@@ -19,7 +20,7 @@ module DomainMonitor
       setup_components
       trap_signals
       start_exporter
-      start_checker_loop
+      start_checker_task
       wait_for_shutdown
     rescue StandardError => e
       logger.error "Startup failed: #{e.message}"
@@ -35,7 +36,6 @@ module DomainMonitor
 
     # 捕获 SIGINT/SIGTERM 信号，优雅退出
     def trap_signals
-      @shutdown = false
       %w[INT TERM].each do |sig|
         Signal.trap(sig) do
           logger.info "Received signal #{sig}, shutting down gracefully..."
@@ -47,11 +47,9 @@ module DomainMonitor
     # 等待关闭信号并 join checker 线程
     def wait_for_shutdown
       sleep 0.5 until @shutdown
-      logger.info 'Waiting for checker thread to finish...'
-      if @checker_thread&.alive?
-        @checker_thread.join(5) # 最多等5秒
-        logger.info 'Checker thread exited.'
-      end
+      logger.info 'Shutting down checker task...'
+      @checker_task&.shutdown
+      @event_thread&.kill
       logger.info 'Shutdown complete.'
     end
 
@@ -108,26 +106,37 @@ module DomainMonitor
       @nacos_client.start_listening
     end
 
-    def start_checker_loop
-      @checker_thread = Thread.new do
+    def start_checker_task
+      @checker_task = Concurrent::TimerTask.new(execution_interval: Config.check_interval, timeout_interval: 60) do
+        run_domain_check
+      end
+      @checker_task.execute
+
+      # 监听配置变更事件，立即触发检查
+      @event_thread = Thread.new do
         loop do
-          # 等待配置变更或定时触发
-          @config_change_trigger.wait(Config.check_interval)
+          @config_change_trigger.wait
+          break if @shutdown
+
           @config_change_trigger.reset
-          domains = Config.domains
-          if domains.empty?
-            logger.warn 'No domains configured, skipping check.'
-            next
-          end
-          begin
-            @checker.update_domain_list(domains)
-            @checker.check_all_domains(Config)
-            Exporter.update_metrics(@checker)
-            logger.info "Checked #{domains.size} domains."
-          rescue StandardError => e
-            logger.error "Domain check failed: #{e.message}"
-          end
+          run_domain_check
         end
+      end
+    end
+
+    def run_domain_check
+      domains = Config.domains
+      if domains.empty?
+        logger.warn 'No domains configured, skipping check.'
+        return
+      end
+      begin
+        @checker.update_domain_list(domains)
+        @checker.check_all_domains(Config)
+        Exporter.update_metrics(@checker)
+        logger.info "Checked #{domains.size} domains."
+      rescue StandardError => e
+        logger.error "Domain check failed: #{e.message}"
       end
     end
 
