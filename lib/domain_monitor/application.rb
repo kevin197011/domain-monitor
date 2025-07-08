@@ -153,10 +153,12 @@ module DomainMonitor
 
           loop do
             logger.debug '[AsyncChecker] Waiting for config_change_trigger or interval timeout...'
+            triggered_by_config = false
             if @config_change_trigger.wait(Config.check_interval)
-              logger.info '=== Config change triggered domain check ==='
+              logger.info '=== Config change triggered immediate domain check ==='
               logger.debug '[AsyncChecker] config_change_trigger event detected, resetting event.'
               @config_change_trigger.reset
+              triggered_by_config = true
             else
               logger.info '=== Scheduled domain check ==='
               logger.debug '[AsyncChecker] Interval timeout, scheduled check.'
@@ -186,7 +188,11 @@ module DomainMonitor
                 logger.debug '[AsyncChecker] Metrics updated.'
                 successful_checks = @checker.domain_metrics.count { |_, m| !m[:error] }
                 elapsed_time = (Time.now - start_time).round(2)
-                logger.info "Domain check completed in #{elapsed_time}s: #{successful_checks}/#{current_domains.length} successful"
+                if triggered_by_config
+                  logger.info "[AsyncChecker] Config change immediate domain check completed in #{elapsed_time}s: #{successful_checks}/#{current_domains.length} successful"
+                else
+                  logger.info "[AsyncChecker] Scheduled domain check completed in #{elapsed_time}s: #{successful_checks}/#{current_domains.length} successful"
+                end
               rescue StandardError => e
                 logger.error "Domain check cycle failed: #{e.message}"
                 logger.error e.backtrace.join("\n")
