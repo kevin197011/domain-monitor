@@ -23,7 +23,7 @@ cp env.example .env
 2. 配置Nacos连接信息:
 ```bash
 # 编辑 .env 文件，配置你的Nacos服务器信息
-NACOS_ADDR=http://your-nacos-server:8848
+NACOS_SERVER_ADDR=http://your-nacos-server:8848
 NACOS_NAMESPACE=your-namespace
 NACOS_DATA_ID=domain-monitor
 NACOS_USERNAME=nacos
@@ -44,7 +44,7 @@ bundle install
 
 2. 设置环境变量:
 ```bash
-export NACOS_ADDR=http://localhost:8848
+export NACOS_SERVER_ADDR=http://localhost:8848
 export NACOS_NAMESPACE=devops
 export NACOS_DATA_ID=domain-monitor
 ```
@@ -90,7 +90,7 @@ settings:
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
-| `NACOS_ADDR` | Nacos服务器地址 | `http://192.168.1.19:8848` |
+| `NACOS_SERVER_ADDR` | Nacos服务器地址 | `http://192.168.1.19:8848` |
 | `NACOS_NAMESPACE` | Nacos命名空间 | `devops` |
 | `NACOS_DATA_ID` | 配置数据ID | `domain-monitor` |
 | `NACOS_GROUP` | 配置分组 | `DEFAULT_GROUP` |
