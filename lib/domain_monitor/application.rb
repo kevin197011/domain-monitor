@@ -147,10 +147,6 @@ module DomainMonitor
       @checker_thread = Thread.new do
         logger.debug '[AsyncChecker] Thread started.'
         begin
-          # 等待第一个检测周期
-          logger.debug "[AsyncChecker] Sleeping for initial interval: #{Config.check_interval}s"
-          sleep Config.check_interval
-
           loop do
             logger.debug '[AsyncChecker] Waiting for config_change_trigger or interval timeout...'
             triggered_by_config = false
