@@ -55,8 +55,21 @@ module DomainMonitor
       CHECK_STATUS.set(success ? 1 : 0, labels: { domain: domain })
     end
 
+    require 'set'
+    @last_domains ||= Set.new
+
     # 批量更新所有指标
     def self.update_metrics(checker)
+      current_domains = checker.domain_metrics.keys.to_set
+
+      # 清理已被移除的域名指标
+      removed_domains = @last_domains - current_domains
+      removed_domains.each do |domain|
+        EXPIRE_DAYS.remove(labels: { domain: domain })
+        EXPIRED.remove(labels: { domain: domain })
+        CHECK_STATUS.remove(labels: { domain: domain })
+      end
+
       checker.domain_metrics.each do |domain, metrics|
         next unless metrics
 
@@ -77,6 +90,8 @@ module DomainMonitor
           update_check_status(domain, true)
         end
       end
+
+      @last_domains = current_domains
     end
   end
 end
