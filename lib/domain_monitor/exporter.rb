@@ -58,6 +58,16 @@ module DomainMonitor
     require 'set'
     @last_domains ||= Set.new
 
+    # 批量重置所有指标（在 Nacos 配置变更时调用）
+    def self.reset_all_metrics
+      # 清空所有已知域名的指标
+      @last_domains&.each do |domain|
+        EXPIRE_DAYS.set(-1, labels: { domain: domain })
+        EXPIRED.set(0, labels: { domain: domain })
+        CHECK_STATUS.set(0, labels: { domain: domain })
+      end
+    end
+
     # 批量更新所有指标
     def self.update_metrics(checker)
       current_domains = checker.domain_metrics.keys.to_set
@@ -65,9 +75,9 @@ module DomainMonitor
       # 清理已被移除的域名指标
       removed_domains = @last_domains - current_domains
       removed_domains.each do |domain|
-        EXPIRE_DAYS.remove(labels: { domain: domain })
-        EXPIRED.remove(labels: { domain: domain })
-        CHECK_STATUS.remove(labels: { domain: domain })
+        EXPIRE_DAYS.set(-1, labels: { domain: domain })
+        EXPIRED.set(0, labels: { domain: domain })
+        CHECK_STATUS.set(0, labels: { domain: domain })
       end
 
       checker.domain_metrics.each do |domain, metrics|
