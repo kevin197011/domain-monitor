@@ -1,7 +1,7 @@
 FROM ruby:3.2
 
 # Install build dependencies
-RUN apk add --no-cache build-base
+RUN apt-get update && apt-get install -y build-essential
 
 # Create app directory
 WORKDIR /app
