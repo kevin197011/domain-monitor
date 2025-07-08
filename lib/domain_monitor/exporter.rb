@@ -65,9 +65,9 @@ module DomainMonitor
       # 清理已被移除的域名指标
       removed_domains = @last_domains - current_domains
       removed_domains.each do |domain|
-        EXPIRE_DAYS.set(nil, labels: { domain: domain })
-        EXPIRED.set(nil, labels: { domain: domain })
-        CHECK_STATUS.set(nil, labels: { domain: domain })
+        EXPIRE_DAYS.remove(labels: { domain: domain })
+        EXPIRED.remove(labels: { domain: domain })
+        CHECK_STATUS.remove(labels: { domain: domain })
       end
 
       checker.domain_metrics.each do |domain, metrics|
