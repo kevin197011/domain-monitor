@@ -140,6 +140,7 @@ env:
 
 # Istio Gateway/VirtualService 配置
 istio:
+  enabled: false
   hosts:
     - "domain-monitor.example.com"
   # selector 可选，默认 istio: ingressgateway
