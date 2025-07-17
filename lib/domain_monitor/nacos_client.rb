@@ -12,6 +12,7 @@ module DomainMonitor
       @last_md5 = nil
       @running = Concurrent::AtomicBoolean.new(false)
       @on_config_change_callback = nil
+      @logger.info 'NacosClient initialized.'
     end
 
     # Start listening for configuration changes from Nacos
@@ -24,6 +25,7 @@ module DomainMonitor
       @logger.debug "Configuration details: dataId=#{@config.nacos_data_id}, group=#{@config.nacos_group}, namespace=#{@config.nacos_namespace}"
       @logger.debug "Nacos server: #{@config.nacos_addr}"
       @logger.info "Initial polling interval: #{@config.nacos_poll_interval} seconds"
+      @logger.info 'Nacos config listener thread started.'
 
       Thread.new do
         while @running.true?
@@ -77,7 +79,7 @@ module DomainMonitor
         end
 
         current_md5 = Digest::MD5.hexdigest(yaml_content)
-        @logger.debug "Content MD5: #{current_md5}, Last MD5: #{@last_md5}"
+        @logger.info "Content MD5: #{current_md5}, Last MD5: #{@last_md5}"
 
         if @last_md5 != current_md5
           @last_md5 = current_md5

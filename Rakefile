@@ -2,7 +2,7 @@
 
 require 'time'
 
-task default: %w[push]
+task default: %w[run]
 
 task :install do
   system 'gem uninstall domain-monitor -aIx'
@@ -18,7 +18,7 @@ task :push do
   system 'git push origin main'
 end
 
-task :docker do
+task :run do
   system 'export COMPOSE_BAKE=true'
   system 'docker compose up --build -d'
   system 'docker compose logs -f'
