@@ -1,9 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "domain-monitor.fullname" . }}
+  name: {{ include "helm-charts.fullname" . }}
+  namespace: {{ .Values.namespace }}
   labels:
-    {{- include "domain-monitor.labels" . | nindent 4 }}
+    monitor: "true"
+    {{- include "helm-charts.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -12,4 +14,4 @@ spec:
       protocol: TCP
       name: http
   selector:
-    {{- include "domain-monitor.selectorLabels" . | nindent 4 }}
+    {{- include "helm-charts.selectorLabels" . | nindent 4 }}

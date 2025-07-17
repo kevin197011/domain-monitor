@@ -1,0 +1,1 @@
+docker login -u admin -p b^+>Mhu"&csQIKt!_~9F harbor.devops.io

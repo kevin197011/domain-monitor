@@ -5,14 +5,19 @@
 # This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
 replicaCount: 1
 
+# Namespace to deploy resources into
+namespace: monitoring
+
 # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
-  repository: your-repo/domain-monitor
-  tag: latest
+  repository: harbor.devops.io/devops/domain-monitor
+  tag: v1
   pullPolicy: IfNotPresent
 
 # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
-imagePullSecrets: []
+imagePullSecrets:
+  - name: harbor-registry-secret
+
 # This is to override the chart name.
 nameOverride: ""
 fullnameOverride: ""
@@ -131,7 +136,7 @@ affinity: {}
 
 env:
   RUBY_ENV: production
-  NACOS_ADDR: http://192.168.1.19:8848
+  NACOS_ADDR: https://nacos.devops.io
   NACOS_NAMESPACE: devops
   NACOS_GROUP: DEFAULT_GROUP
   NACOS_DATA_ID: domain-monitor.yml
@@ -146,3 +151,11 @@ istio:
   # selector 可选，默认 istio: ingressgateway
   # selector:
   #   istio: ingressgateway
+
+# 添加 Harbor 认证信息配置段
+harbor:
+  enabled: true
+  server: harbor.devops.io
+  username: admin
+  # Note: Using single quotes to preserve special characters
+  password: 'b^+>Mhu"&csQIKt!_~9F'
