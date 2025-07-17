@@ -92,6 +92,7 @@ module DomainMonitor
               @logger.debug "Settings in config: #{config_data['settings'].inspect}"
 
               if @config.update_app_config(config_data)
+                @logger.info "Nacos config applied: domains=#{@config.domains.size}, check_interval=#{@config.check_interval}, max_concurrent=#{@config.max_concurrent_checks}"
                 @logger.info 'Configuration updated successfully'
                 @logger.debug "Current configuration: metrics_port=#{@config.metrics_port}, check_interval=#{@config.check_interval}s"
                 @logger.debug "Monitored domains: #{@config.domains.inspect}"

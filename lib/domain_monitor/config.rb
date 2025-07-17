@@ -58,6 +58,8 @@ module DomainMonitor
 
         # Validate configuration
         validate_app_config
+        # 新增 info 日志
+        logger.info "App config updated: domains=#{@domains.size}, check_interval=#{@check_interval}, max_concurrent=#{@max_concurrent_checks}, expire_threshold_days=#{@expire_threshold_days}, metrics_port=#{@metrics_port}"
         true
       rescue StandardError => e
         logger.error "Configuration update error: #{e.message}"

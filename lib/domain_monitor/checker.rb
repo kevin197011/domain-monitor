@@ -41,6 +41,16 @@ module DomainMonitor
       thread_pool.wait_for_termination(30)
 
       @logger.debug "Domain check cycle completed using #{max_concurrent} concurrent threads"
+
+      # 新增：输出本轮检查统计
+      metrics = get_domain_metrics
+      total = metrics.size
+      success = metrics.count { |_, m| m[:error].nil? }
+      failed = metrics.count { |_, m| m[:error] }
+      expiring = metrics.count do |_, m|
+        m[:days_until_expiry] && m[:days_until_expiry] >= 0 && m[:days_until_expiry] <= current_config.expire_threshold_days
+      end
+      @logger.info "Domain check summary: total=#{total}, success=#{success}, failed=#{failed}, expiring_soon=#{expiring}"
     rescue StandardError => e
       @logger.error "Error in domain check cycle: #{e.message}"
       @logger.debug e.backtrace.join("\n")
@@ -63,6 +73,10 @@ module DomainMonitor
       else
         status = result[:days_until_expiry] <= current_config.expire_threshold_days ? 'CRITICAL' : 'OK'
         @logger.debug "Domain #{domain}: #{result[:days_until_expiry]} days until expiry (#{status})"
+        # 新增：仅未过期时输出 info
+        if status == 'OK'
+          @logger.info "Domain #{domain} is healthy, expires in #{result[:days_until_expiry]} days (#{result[:expiry_date]})"
+        end
       end
 
       result

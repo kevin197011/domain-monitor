@@ -57,6 +57,9 @@ module DomainMonitor
         end
       end
       @last_domains = current_domains
+      # 新增 info 日志
+      error_count = checker.domain_metrics.values.count { |m| m[:error] }
+      DomainMonitor::Logger.instance.info "Exporter updated metrics: domains=#{current_domains.size}, error_domains=#{error_count}"
     end
 
     private
