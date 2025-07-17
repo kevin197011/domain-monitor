@@ -35,12 +35,6 @@ module DomainMonitor
 
     def update_metrics(checker)
       current_domains = checker.domain_metrics.keys.to_set
-      # removed_domains = @last_domains - current_domains
-      # removed_domains.each do |domain|
-      #   @expire_days.set(-1, labels: { domain: domain })
-      #   @expired.set(0, labels: { domain: domain })
-      #   @check_status.set(0, labels: { domain: domain })
-      # end
       checker.domain_metrics.each do |domain, metrics|
         next unless metrics
 

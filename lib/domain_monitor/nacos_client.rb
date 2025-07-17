@@ -131,7 +131,7 @@ module DomainMonitor
             raise "YAML parsing failed: #{e.message}"
           end
         else
-          @logger.debug 'Configuration unchanged (same MD5)'
+          @logger.info 'Configuration unchanged (same MD5)'
         end
       else
         @logger.error "Failed to fetch configuration: HTTP #{response.code} - #{response.body}"

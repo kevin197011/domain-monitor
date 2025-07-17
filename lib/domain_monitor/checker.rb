@@ -10,9 +10,18 @@ module DomainMonitor
       @whois_client = WhoisClient.new(@config)
       @domain_metrics = {}
       @metrics_mutex = Mutex.new
-
+      # 初始化全局线程池
+      @thread_pool = Concurrent::FixedThreadPool.new(@config.max_concurrent_checks)
       # 初始化所有域名的指标
       initialize_domain_metrics
+    end
+
+    # 优雅关闭线程池
+    def shutdown_pool
+      @logger.info 'Shutting down checker thread pool...'
+      @thread_pool.shutdown
+      @thread_pool.wait_for_termination(30)
+      @logger.info 'Checker thread pool shutdown complete.'
     end
 
     def check_all_domains(override_config = nil)
@@ -25,20 +34,16 @@ module DomainMonitor
       max_concurrent = current_config.max_concurrent_checks
       @logger.info "Starting domain check for #{current_domains.size} domains (concurrency: #{max_concurrent})"
 
-      # 使用线程池并发检查域名，并发数基于当前配置
-      thread_pool = Concurrent::FixedThreadPool.new(max_concurrent)
+      # 复用全局线程池
       futures = []
-
       current_domains.each do |domain|
-        futures << Concurrent::Future.execute(executor: thread_pool) do
+        futures << Concurrent::Future.execute(executor: @thread_pool) do
           check_domain(domain, current_config)
         end
       end
 
       # 等待所有检查完成
       futures.each(&:wait)
-      thread_pool.shutdown
-      thread_pool.wait_for_termination(30)
 
       @logger.debug "Domain check cycle completed using #{max_concurrent} concurrent threads"
 
@@ -54,8 +59,6 @@ module DomainMonitor
     rescue StandardError => e
       @logger.error "Error in domain check cycle: #{e.message}"
       @logger.debug e.backtrace.join("\n")
-    ensure
-      thread_pool&.shutdown
     end
 
     def check_domain(domain, config = nil)

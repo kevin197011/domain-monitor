@@ -67,6 +67,7 @@ module DomainMonitor
       logger.info 'Shutting down checker task...'
       @checker_task&.shutdown
       @event_thread&.kill
+      @checker&.shutdown_pool
       logger.info 'Shutdown complete.'
     end
 
